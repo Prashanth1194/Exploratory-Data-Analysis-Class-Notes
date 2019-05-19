@@ -1,0 +1,88 @@
+---
+title: "In-class 1/17/19"
+author: "S670"
+date: "1/17/2019"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load packages and data:
+
+```{r}
+library(lattice)
+library(tidyverse)
+```
+
+Use aggregate():
+
+```{r}
+singer.agg = aggregate(height ~ voice.part, median, data = singer)
+ggplot(singer.agg, aes(x = height, y = voice.part)) + geom_point()
+```
+
+Use summarise() and group_by()
+
+```{r}
+summarise(group_by(singer, voice.part), median = median(height), mean = mean(height))
+```
+
+Or pipes:
+
+```{r}
+singer.sum = singer %>% group_by(voice.part) %>% summarise(Median = median(height), Mean = mean(height))
+ggplot(singer.sum, aes(x = Median, y = voice.part)) + geom_point()
+```
+
+```{r}
+singer.long = gather(singer.sum, key = "Statistic", value = "Height", c("Median", "Mean"))
+ggplot(singer.long, aes(x = Height, y = voice.part, color = Statistic)) + geom_point()
+```
+
+## Comparing whole distributions
+
+```{r}
+ggplot(singer, aes(x = voice.part, y = height)) + geom_boxplot(coef = 3) +
+  theme(axis.text = element_text(size = 12))
+```
+
+```{r}
+ggplot(singer, aes(x = height)) + geom_histogram(binwidth = 1) +
+  facet_wrap(~ voice.part, ncol = 2)
+```
+
+```{r}
+ggplot(singer, aes(x = height)) + geom_density() +
+  facet_wrap(~ voice.part, ncol = 2)
+```
+
+```{r}
+ggplot(singer, aes(sample = height)) + stat_qq() +
+  facet_wrap(~ voice.part, ncol = 4)
+```
+
+Men vs. women
+
+```{r}
+singer$sex = recode(singer$voice.part, "Soprano 1" = "Female", "Soprano 2" = "Female", "Alto 1" = "Female", "Alto 2" = "Female", "Tenor 1" = "Male", "Tenor 2" = "Male", "Bass 1" = "Male", "Bass 2" = "Male")
+ggplot(singer, aes(x = height)) + geom_histogram(binwidth = 1) + facet_wrap(~ sex, ncol = 1)
+```
+
+
+Compare two distributions directly using a **two-sample** QQ plot.
+
+```{r}
+# library(lattice)
+qq(sex ~ height, data = singer)
+```
+
+```{r}
+qq(sex ~ log(height), data = singer)
+```
+
+
+
+
+

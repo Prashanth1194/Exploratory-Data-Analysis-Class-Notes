@@ -1,0 +1,172 @@
+---
+title: "In-class 3/19/19"
+author: "S670"
+date: "3/19/2019"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, tidy = TRUE, message = FALSE)
+cb_palette = c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+```
+
+**Optional reading: Gelman & Hill pp. 110--116, 118--119.**
+
+## Stop and frisk
+
+Gelman and Hill have data on police stops in New York City in 1998--1999, during Giuliani's mayoralty. There have been accusations that some ethnic groups have been stopped at rates not justified by either their arrest rate or their location (as measured by precinct.) We'll model this data using (at first) **Poisson regression**, another form of GLM. In a standard Poisson regression, the response has a Poisson distribution with the *log* of the expected value given by a linear function of the predictors. In the single-variable case:
+
+$$
+\log(E[Y|x]) = \beta_0 + \beta_1 x
+$$
+
+The data, with noise added for confidentiality, is at
+
+http://www.stat.columbia.edu/~gelman/arm/examples/police/frisk_with_noise.dat
+
+The first few rows of this file are a description, so we tell R to skip these when reading the data.
+
+```{r}
+frisk = read.table("http://www.stat.columbia.edu/~gelman/arm/examples/police/frisk_with_noise.dat", skip = 6, header = TRUE)
+nrow(frisk)
+summary(frisk)
+```
+
+The data gives counts of police stops for all combinations of 75 precincts, three ethnicities of the person stopped (1 = black, 2 = Hispanic, 3 = white), and four types of crime (violent, weapons, property, and drug,) for a total of $75 \times 3 \times 4 = 900$ rows. The other two variables are population of the ethnic group within the precinct and the number of arrests of people in that ethnic group in that precinct for that type of crime in 1997.
+
+Having numerical ethnicity is annoying, so recode:
+
+```{r, warning = FALSE}
+library(tidyverse)
+frisk$eth = recode_factor(frisk$eth, `1` = "black", `2` = "Hispanic", `3` = "white")
+```
+
+To simplify matters, we'll ignore the type of crime, and aggregate the number of stops and past arrests over all four types.
+
+```{r}
+frisk.sum = aggregate(cbind(past.arrests, stops) ~ precinct + eth, sum, data = frisk)
+nrow(frisk.sum)
+summary(frisk.sum)
+```
+
+We now have 225 rows (75 precincts $\times$ 3 ethnic groups.) Let's first draw some pictures.
+
+```{r}
+ggplot(frisk.sum, aes(x = stops, color = eth, fill = eth)) + geom_histogram(breaks = seq(0, 2800, 50)) + facet_wrap(~eth, ncol = 1) + scale_color_manual(values = cb_palette) + scale_fill_manual(values = cb_palette)
+```
+
+Quite clearly, the distributions of stops for black and Hispanic people are very different from the distribution for white people, though there may be multiple explanations for this. Let's look at the relationship of stops with past arrests. Because of skewness, we log both variables.
+
+```{r}
+ggplot(frisk.sum, aes(x = log(past.arrests), y = log(stops), color = eth)) + geom_point() + scale_color_manual(values = cb_palette)
+```
+
+There's certainly a relationship. The question is whether the relationship between the two variables is sufficient to explain the differences between the stops of the three ethnic groups. You could get at this just by adding smoother for the three groups:
+
+```{r}
+gg = ggplot(frisk.sum, aes(x = log(past.arrests), y = log(stops), group = eth, color = eth)) + geom_point() + geom_smooth(method.args = list(degree = 1), se = FALSE)
+gg + scale_color_manual(values = cb_palette)
+```
+
+Since this is an important topic, however, we should be a bit more careful and construct a model.
+
+### Poisson regression
+
+We'll start off with a Poission regression model that's much too simple, and build up to a more useful one.
+
+The simplest model just treats each number of stops as a realization of a Poisson random variable.
+
+```{r}
+constant.glm = glm(stops ~ 1, family = poisson, data = frisk.sum)
+summary(constant.glm)
+```
+
+By now you might be sick of all the cruft that gets displayed when we use `summary()` on a GLM. Let's use Gelman et al.'s `display()` function in package `arm` instead.
+
+```{r, message = FALSE}
+# install.packages(arm)
+library(arm)
+display(constant.glm)
+```
+
+This pares away most of the low value information. We see the coefficent estimate (on the log scale) is 6.37, which gives $e^{6.37} = 584$ on the original scale. That is, the number of stops for each ethnic group within each precinct is modeled as a random variable with distribution
+
+$$
+\textrm{Poisson}(584).
+$$
+
+The other number to keep track of is the (residual) *deviance*. Low deviance is good, as long as you're not overfitting. In particular, every time you add a degree of freedom, you should expect to reduce the deviance by 1 if you're just adding random noise. So if you're not overfitting when you fit a complex model, you should expect to reduce the deviance by more than you increase the degrees of freedom.
+
+Now this model is obviously inadequate. We might, for example, think that the number of stops for an ethnic groups in a precinct should be proportional to the number of arrests for that ethnicity-precinct (though this is controversial.) In a GLM, we can model this using an **offset**:
+
+```{r}
+offset.glm = glm(stops ~ 1, family = poisson, offset = log(past.arrests), data = frisk.sum)
+display(offset.glm)
+```
+
+Since the linear predictor is on the log scale, the offset also has to be logged. This gives the following model for each precinct/race combination:
+
+$$
+\log[E(\textrm{stops}|\textrm{past arrests})] = -0.59 + \log(\textrm{past arrests})
+$$
+or (taking the exponential of both sides)
+$$
+E(\textrm{stops}|\textrm{past arrests}) = e^{-0.59 + \log(\textrm{past arrests})} = 0.56 \times \textrm{past arrests}
+$$
+
+To check this, we look at the predicted number of stops for precinct/race combinations with 10, 100, and 1000 past arrests respectively:
+
+```{r}
+predict(offset.glm, newdata = data.frame(past.arrests = c(10, 100, 1000)), type = "response")
+```
+
+Our model has a much lower deviance than the constant model, so we've improved the fit by a lot.
+
+Now we want to see what happens if we add ethnic group as a predictor. Ethnic group is categorical, so we use it as a factor.
+
+```{r}
+eth.glm = glm(stops ~ eth, family = poisson, offset = log(past.arrests), data = frisk.sum)
+display(eth.glm)
+```
+
+Note that "past arrests" doesn't have a coefficient: the model assumes that expected stops are proportional to past arrests (where the constant of proportionality may depend on other stuff.) The deviance has dropped substantially again. On the log scale, we have additive terms for the offset and for ethnicity (relative to black, which is taken as the baseline due to alphabetical order.) On the original scale, the terms are multiplicative, and we can combine the offset and ethnicity terms to get a coefficient for each ethnicity. That is, the model is now
+
+$$
+E(\textrm{stops}) = \textrm{multiplier for ethnic group} \times \textrm{past arrests}
+$$
+
+where the multipliers are
+
+```{r}
+eth.co = coefficients(eth.glm)
+multipliers = exp(c(eth.co[1], eth.co[1] + eth.co[2], eth.co[1] + eth.co[3]))
+print(multipliers)
+```
+
+for black, Hispanic, and white respectively. We can check this using `predict()`:
+
+```{r}
+predict(eth.glm, newdata = data.frame(past.arrests = 1000, eth = c("black", "Hispanic", "white")), type = "response")
+```
+
+So far we have shown that black and Hispanic people were stopped at a proportionately higher fraction of their arrest rate compared to white people. However, as the data isn't from a randomized experiment, there may be confounding. For example, black and Hispanic people generally live in precincts with higher stop rates. (Whether this is in itself evidence of bias is again, controversial.) Since this is exploratory work, we won't attempt to prove cause-and-effect, but we'll see whether we can simply explain the results by including a precinct variable. If we can, then the NYPD might argue that minorities are only stopped more often because they, perhaps coincidentally, tend to live in precincts with high stop rates.
+
+```{r}
+precinct.glm = glm(stops ~ eth + factor(precinct), family = poisson, offset = log(past.arrests), data = frisk.sum)
+```
+
+We won't print out the full results because we now have a coefficient for each precinct. Let's just first check the deviance has gone down significantly:
+
+```{r}
+deviance(eth.glm)
+deviance(precinct.glm)
+```
+
+Now look at the first few coefficients (and their standard errors):
+
+```{r}
+coefficients(summary(precinct.glm))[1:6, 1:2]
+```
+
+After controlling for precinct, the differences between the white and minority coefficients becomes even bigger.
+

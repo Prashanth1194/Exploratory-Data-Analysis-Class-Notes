@@ -1,0 +1,231 @@
+---
+title: "In-class 3/5/19"
+author: "S670"
+date: "3/5/2019"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, tidy = TRUE)
+```
+
+### Livestock
+
+Load the data and basics:
+
+```{r, message = FALSE}
+load("lattice.RData")
+library(tidyverse)
+library(MASS)
+cb_palette = c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+```
+
+The data frame `livestock` contains the number of horses, sheep, cattle, pigs, and poultry in 26 European countries in the 1980s. (You can tell it's from the Eighties because some of the countries don't exist anymore.) The data is in long form, with variable names `livestock.type`, `country`, and `count`. Let's first show a dot plot that gives the big picture.
+
+```{r}
+ggplot(livestock, aes(x=count, y=country, color = livestock.type)) + geom_point() + theme(axis.text.y = element_text(size=7))
+```
+
+The data is extremely skewed, because some countries have a lot of chickens. From hereon out we'll do a $\log_{10}$ transformation of count.
+
+We'll condition on animal and country in turn. First, facet wrap on `livestock.type`:
+
+```{r, fig.height = 6}
+ggplot(livestock, aes(x=count, y=country)) + geom_point() + facet_wrap(~livestock.type, ncol=3) + scale_x_log10() + theme(axis.text.y = element_text(size=7))
+```
+
+Note that Turkey has a huge outliers for "pigs" due to being a predominantly Muslim country. The other historically Muslim country in the data set is Albania, which also has a low value for pigs. However, at this stage it's hard to tell if Albania's low pig count is unusual or just because the country is small.
+
+Next, facet wrap on country.
+
+```{r, fig.height = 6}
+gg = ggplot(livestock, aes(x=count, y=livestock.type)) + geom_point() + facet_wrap(~country, ncol=4) + scale_x_log10(breaks = 10^(4:8), labels = c("10k", "100k", "1M", "10M", "100M"))
+gg + theme(axis.text.x = element_text(size=7), axis.text.y = element_text(size=7))
+```
+
+The majority of the countries have the lowest count for horses and the higher count for poultry. The other three animals are not in a consistent order.
+
+So far, we've just plotted the data in the order that it came in (which was sorted by country median.) To change the order, we specify the order of levels in the underlying factor. For example, we can put the country levels in alphabetical order:
+
+```{r, fig.height = 6}
+country.alpha = sort(levels(livestock$country))
+ggplot(livestock, aes(x=count, y=factor(country, levels = country.alpha))) + geom_point() + facet_wrap(~livestock.type, ncol=3) + scale_x_log10() + theme(axis.text.y = element_text(size=7)) + ylab("Country")
+```
+
+Alphabetical order isn't very useful though. Usually increasing or decreasing numerical order will make the patterns clearer. To plot in order of, say, mean instead of median:
+
+```{r, fig.height = 6}
+gg = ggplot(livestock, aes(x = count, y=fct_reorder(country, count, mean))) + geom_point() + facet_wrap(~livestock.type, ncol=3) + scale_x_log10()
+gg + theme(axis.text.y = element_text(size=7)) + ylab("Country")
+```
+
+### Fitting a model
+
+There are lots of ways of varying complexity to fit a model to multiway data. One basic idea is to break the data down into additive pieces: in our case, the logged count would be an animal effect plus a country effect plus a residual. (Of course, we've taken logs, so it's multiplicative on the original scale.)
+
+The simplest way to fit an additive model is to just use `lm()`, i.e. do an ANOVA. As usual, this fits using least squares:
+
+```{r}
+livestock.lm = lm(log10(count) ~ livestock.type + country, data=livestock)
+dummy.coef(livestock.lm)$livestock.type
+```
+
+However, least squares is (also as usual) potentially misleading when there are outliers. Here, Turkey will throw off least squares pretty badly.
+
+An outlier-resistant alternative is to use `rlm()` with bisquare. Because Turkey is pretty far out there, we need to allow a large number of iterations for the algorithm to converge.
+
+```{r}
+livestock.rlm = rlm(log10(count) ~ livestock.type + country, psi = psi.bisquare, maxit = 50, data=livestock)
+dummy.coef(livestock.rlm)$livestock.type
+```
+
+The coefficients are now estimating median effects instead of mean effects. The coefficients for horses, sheep, and pigs change a lot.
+
+An alternative is to use **median polish**:
+
+```{r}
+livestock.wide = livestock %>% spread(livestock.type, count)
+row.names(livestock.wide) = livestock.wide$country
+livestock.wide = livestock.wide[,-1]
+livestock.mp = medpolish(log10(livestock.wide))
+livestock.mp$col
+```
+
+Note that here the median is set to zero rather than the sum. 
+
+Anyway, I don't really understand median polish, so let's stick with the `rlm` for now. We wish to plot the effect sizes using dot plots. We first do the animal effects:
+
+```{r}
+animal.effect = sort(dummy.coef(livestock.rlm)$livestock.type)
+animal = factor(names(animal.effect), levels = names(animal.effect))
+animal.effect.df = data.frame(animal, animal.effect)
+ggplot(animal.effect.df, aes(x = animal.effect, y = animal)) + geom_point() + xlab("Animal effect (log 10 scale)")
+```
+
+As we saw visually, poultry is the highest and horses are the lowest. The other three are all pretty close.
+
+Now do country effects:
+
+```{r}
+country.effect = sort(dummy.coef(livestock.rlm)$country)
+country = factor(names(country.effect), levels = names(country.effect))
+country.effect.df = data.frame(country, country.effect)
+ggplot(country.effect.df, aes(x = country.effect, y = country)) + geom_point() + xlab("Country effect (log 10 scale)")
+```
+
+The former U.S.S.R. has the biggest numbers, while Albania has the smallest. It would be interesting to see whether the effects relate more closely to geographic area or population size.
+
+We can now redraw our original faceted plots, reordering the countries by their effect size (the animals are already in the right order.) First, condition on animal:
+
+```{r, fig.height = 6}
+livestock.rlm.df = data.frame(livestock, .fitted = fitted.values(livestock.rlm), .resid = residuals(livestock.rlm))
+livestock.rlm.df$country = factor(livestock$country, levels = names(country.effect))
+livestock.rlm.df$livestock.type = factor(livestock$livestock.type, levels = names(animal.effect))
+ggplot(livestock.rlm.df, aes(x=count, y=country)) + geom_point() + facet_wrap(~livestock.type, ncol=3) + scale_x_log10() + theme(axis.text.y = element_text(size=7))
+```
+
+The order is slightly different now; France, for example, is up from fourth to third. (Note that our order is different from in Cleveland's book; I think he didn't do enough iterations.)
+
+Now condition on country. Only the order of the panels changes:
+
+```{r, fig.height = 6}
+gg = ggplot(livestock.rlm.df, aes(x=count, y=livestock.type)) + geom_point() + facet_wrap(~country, ncol=4) + scale_x_log10(breaks = 10^(4:8), labels = c("10k", "100k", "1M", "10M", "100M"))
+gg + theme(axis.text.y = element_text(size=7))
+```
+
+We could also combine the facets on to one plot and distinguish by color. However, that would be a bit busy and disguise the separation into within-country and across-country variation that's the point of the additive model.
+
+### Fitted values and residuals
+
+The fitted values consist of center plus animal effect plus country effect. Condition on animal:
+
+```{r livestock.fitted, fig.height = 6}
+ggplot(livestock.rlm.df, aes(x=.fitted, y=country)) + geom_point() + facet_wrap(~livestock.type, ncol=3) + theme(axis.text.y = element_text(size=7)) + ggtitle("Fitted values for European livestock model")
+```
+
+We see the "curve" just shifts to the right as we get to the more popular animals. The "slope" of the curve is perhaps surprisingly close to vertical: on a log scale, there isn't that much difference between Russia and Albania. Even on the original scale, the Russia multiplier is only about 60 times the Albania multiplier -- this might sound like a lot but the former U.S.S.R. was really, really big.
+
+Now condition on country.
+
+```{r, fig.height = 6}
+ggplot(livestock.rlm.df, aes(x=.fitted, y=livestock.type)) + geom_point() + facet_wrap(~country, ncol=4) + theme(axis.text.y = element_text(size=7)) + ggtitle("Fitted values for European livestock model")
+```
+
+This is pretty boring -- the additive model means we see exactly the same pattern 26 times. The only difference is a very gradual shift to the right (more animals.)
+
+Looking at the residuals should be more interesting. Condition on animal type:
+
+```{r, fig.height = 6}
+gg = ggplot(livestock.rlm.df, aes(x=.resid, y=country)) + geom_point() + facet_wrap(~livestock.type, ncol=3) + theme(axis.text.y = element_text(size=7))
+gg + ggtitle("Residuals of European livestock model")
+```
+
+The Turkey-pig outlier is still apparent. We now see that Albania's pig population is somewhat lower than we'd expect from the additive model, but is nowhere near as extreme. The variation in sheep is also notable: some northern European countries just don't like sheep very much.
+
+Condition on country:
+
+```{r, fig.height = 6}
+gg = ggplot(livestock.rlm.df, aes(x=.resid, y=livestock.type)) + geom_point() + facet_wrap(~country, ncol=4) + theme(axis.text.y = element_text(size=7))
+gg + ggtitle("Residuals of European livestock model")
+```
+
+Again, we see that sheep are nearly an outlier in countries like Denmark, Belgium, and West Germany. In European countries (in the 1980s), milk and eggs were a consistent part of every culture, while wool and sheep meat were more specialized.
+
+### Maps
+
+Maps are overrated. They can be useful when:
+
+- Longitude and latitude are inherently of interest (e.g. when studying climate)
+- The audience knows the underlying political geography well (e.g. most Americans know more or less which state goes where.) Even in this case maps can be distracting (because it's not like the shape of the state matters) or misleading (because geographic size might not matter at all.)
+
+It's quite common that neither of these conditions are met. In our case, most people outside Europe won't know which country is Romania and which is Bulgaria, so we might as well show them dot plots. Nevertheless, maps look cool and knowing how to draw them might impress someone enough that they give you a job, so we'll address them briefly. First, let's set up a data frame:
+
+```{r}
+sheep.df = subset(livestock.rlm.df, livestock.type == "Sheep")
+names(sheep.df)
+# Change "country" column name to "region"
+names(sheep.df)[2] = "region"
+```
+
+One option is to use the `maps` library in conjunction with `geom_map()` in `ggplot2`. We have to fiddle a bit with the country names, e.g. the world map calls the United Kingdom "UK" and doesn't know that these are the same place.
+
+```{r sheepmap}
+library(maps)
+map.world = map_data(map = "world")
+# Pretend it's the Eighties again
+map.world$region[map.world$region == "UK"] = "United Kingdom"
+map.world$region[map.world$region == "Czech Republic"] = "Czechoslovakia"
+map.world$region[map.world$region == "Slovakia"] = "Czechoslovakia"
+map.world$region[map.world$region == "Russia"] = "Russia et al."
+map.world$region[map.world$region == "Latvia"] = "Russia et al."
+map.world$region[map.world$region == "Lithuania"] = "Russia et al."
+map.world$region[map.world$region == "Estonia"] = "Russia et al."
+map.world$region[map.world$region == "Belarus"] = "Russia et al."
+map.world$region[map.world$region == "Ukraine"] = "Russia et al."
+map.world$region[map.world$region == "Moldova"] = "Russia et al."
+map.world$region[map.world$region == "Serbia"] = "Yugoslavia"
+map.world$region[map.world$region == "Montenegro"] = "Yugoslavia"
+map.world$region[map.world$region == "Croatia"] = "Yugoslavia"
+map.world$region[map.world$region == "Bosnia and Herzegovina"] = "Yugoslavia"
+map.world$region[map.world$region == "Kosovo"] = "Yugoslavia"
+map.world$region[map.world$region == "Macedonia"] = "Yugoslavia"
+map.world$region[map.world$region == "Slovenia"] = "Yugoslavia"
+sheep.merge = as.data.frame(merge(map.world, sheep.df, by="region", all.x = TRUE, all.y = FALSE))
+ggplot(sheep.merge, aes(fill=.resid)) + geom_map(map=map.world, aes(map_id=region)) + coord_equal() + xlim(-10, 30) + ylim(35, 65) + scale_fill_continuous(name = "Sheep residual")
+```
+
+The lighter colors are sheepy countries, while the darker ones are less sheepy. In general, the map gets darker as you move north, though there are plenty of exceptions, like the U.K. Note that the one thing I didn't fix was combining West and East Germany, because I was too lazy to do it properly. (The easiest non-cheating solution would be to combine both Germanies in the original data set and refit the whole model.)
+
+A slightly more user-friendly option is the `rworldmap` package.
+
+```{r sheepmap2}
+# install.packages("rworldmap")
+library(rworldmap)
+sheep.join = joinCountryData2Map(sheep.df, joinCode = "NAME", nameJoinColumn = "region")
+mapCountryData(sheep.join, nameColumnToPlot = ".resid", mapRegion = "europe", mapTitle = "'80s sheep residual")
+```
+
+Again, you can rename things to fill in some of the blanks for newly split countries. You probably get the point by now, though.
+

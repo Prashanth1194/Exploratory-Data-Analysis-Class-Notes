@@ -1,0 +1,269 @@
+---
+title: "In-class 2/7/19"
+author: "S670"
+date: "2/7/2019"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, tidy = TRUE, message = FALSE)
+```
+
+Load stuff:
+
+```{r}
+library(tidyverse)
+library(GGally)
+load("lattice.RData")
+cb_palette = c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+```
+
+## Burning rubber
+
+**READ: Cleveland pp. 180--187, 200--213.**
+
+### The rubber data
+
+The data frame `rubber` in `lattice.RData` contains three measurements on 30 specimens of tire rubber:
+
+- `hardness`: how much the rubber rebounds after being indented (in Shore degrees.)
+- `tensile.strength`: the force per cross-sectional area required to break the rubber (in kg/cm$^2$.)
+- `abrasion.loss`: the amount of material lost to abrasion when rubbing it per unit energy (in grams per hp-hour.) This gives you an idea how fast the tire will wear away when you drive. If we had to choose a "response" variable, it would be this one.
+
+We want to first look at the pairwise relationships between all three variables, so we draw $C_2^3$ scatterplots. We can again use `ggpairs()`:
+
+```{r trivariate1}
+ggpairs(rubber, columns = c("hardness", "tensile.strength", "abrasion.loss"))
+```
+
+The diagonal gives density plots. There's no horrible nonlinearity in the data, so the correlations should be good summaries of the strengths of the relationships.
+
+To get at the *trivariate* relationship and not just the bivariate ones, we can use color to indicate the value of one of the three variables. Suppose we count a hardness of over 62 as "hard" and a hardness of 62 or less as "soft". We can create a factor variable that takes these two values, then color hard and soft specimens with different colors.
+
+```{r}
+hard = rep(NA, nrow(rubber))
+hard[rubber$hardness > 62] = "Hard"
+hard[rubber$hardness <= 62] = "Soft"
+rubber2 = data.frame(rubber, hard)
+ggpairs(rubber2, columns = 1:3, aes(colour = hard))
+```
+
+The truly trivariate plot is the one in the middle of the bottom row. For a given tensile strength, a soft specimen tends to have more abrasion loss than a hard specimen, which seems to make physical sense.
+
+In the above plot, we colored the points conditional on the binary hardness variable we created. Of course, we could create a hardness variable with three or more levels if we wished. After creating such a categorical variable, we can either color-code or we can draw separate plots for each value of the categorical variable. The latter approach is called a **conditional plot** or **coplot**, and is achieved through faceting. We'll cut the hardness variable into three categories, plot three scatterplots of abrasion loss against tensile strength, and add loess smoothers.
+
+```{r}
+ggplot(rubber, aes(x=tensile.strength, y=abrasion.loss)) + geom_point() + geom_smooth(method.args=list(degree=1)) + facet_grid(~cut_number(hardness, n=3)) + labs(title="Rubber data split by hardness")
+```
+
+There's a similar decreasing relationship in each panel, while the level of the curve falls as hardness increases. In the first two plots, the curve seems to flatten out beyond a tensile strength of 180 (in the third it's hard to tell what happens because of lack of data.)
+
+It can be worth trying out multiple cuts and seeing if you get similar results. Try a four categories hardness cut (with a high `span` because of the low number of observations after cutting.)
+
+```{r}
+ggplot(rubber, aes(x=tensile.strength, y=abrasion.loss)) + geom_point() + geom_smooth(span=1, method.args=list(degree=1)) + facet_grid(~cut_number(hardness, n=4)) + labs(title="Rubber data split by hardness")
+```
+
+Again we see the relationships tend to flatten out somewhere past a tensile strength of 180.
+
+We can also cut across tensile strength, then draw scatterplots of abrasion loss against hardness for each cut. Try three cuts for tensile strength:
+
+```{r}
+gg = ggplot(rubber, aes(x=hardness, y=abrasion.loss)) + geom_point()
+gg + geom_smooth(method.args=list(degree=1)) + facet_grid(~cut_number(tensile.strength, n=3)) + labs(title="Rubber data split by tensile strength")
+```
+
+We get an approximately linear relationship in all three plots. The slope is negative and fairly similar in all three.
+
+Try four cuts for tensile strength:
+
+```{r}
+gg + geom_smooth(method.args=list(degree=1)) + facet_grid(~cut_number(tensile.strength, n=4)) + labs(title="Rubber data split by tensile strength")
+```
+
+The differences in level are a bit more apparent now -- the two plots for low tensile strength have their lines much higher than for the two plots with low tensile strength. The weird thing is that the relationship isn't strictly decreasing as we go from left to right. We want to investigate further by doing more cuts, but then we start to run out of data. We can alleviate this by just fitting linear models instead of loess curves.
+
+```{r}
+gg + geom_smooth(method="lm") + facet_grid(~cut_number(tensile.strength, n=5)) + labs(title="Rubber data split by tensile strength")
+```
+
+There really does seem to be a critical value for tensile strength at which the relationship changes. This is consistent with what we saw in the coplots conditioning on hardness: there was a flattening beyond a tensile strength of about 180.
+
+This exploration leads to some suggestions for fitting a model with abrasion loss as the response.
+
+- The model might have a critical point for tensile strength, such that the relatioship between hardness and abrasion loss is decreasing below that point and flat above that point. We can either try to carefully locate that point or just eyeball it and say it's around 180.
+- The nonmonotonicity in tensile strength could be due to outliers. (*Monotonic* means the trend either always goes up or always goes down. *Nonmonotonic* means the trend is upward in some places and downward in others.) So we should strongly consider using a robust/resistant fitting method.
+- There's no obvious need for interaction terms. (If the coplots had lines with very different slopes, we'd have to strongly consider them.)
+- The model fitting could get pretty complex unless stick to linear models (and variations thereof.)
+
+### GAM approach
+
+```{r}
+library(mgcv)
+rubber.gam = gam(abrasion.loss ~ hardness + s(tensile.strength), data=rubber)
+```
+
+Predict on a grid:
+
+```{r}
+rubber.grid = expand.grid(hardness = c(54,64,74,84), tensile.strength = 144:198)
+rubber.gam.pred = predict(rubber.gam, newdata = rubber.grid)
+rubber.gam.pred.df = data.frame(rubber.grid, abrasion.loss = as.vector(rubber.gam.pred))
+```
+
+Color by hardness and plot:
+
+```{r}
+gg = ggplot(rubber.gam.pred.df, aes(x = tensile.strength, y = abrasion.loss, group = hardness, color = hardness)) + geom_line()
+gg + labs(title="Abrasion loss GAM fit vs. tensile strength, by hardness")
+```
+
+This gives a pretty smooth fit -- you don't get the sharp elbow at 180.
+
+### Loess approach
+
+Loess fits locally, so it always has an "interaction." We can force the fit in a variable to be linear by naming the variable in the `parametric` and `drop.square` arguments. We can downweight outliers by specifying `family = "symmetric"`.
+
+```{r}
+rubber.lo = loess(abrasion.loss ~ hardness * tensile.strength, parametric = "hardness", drop.square = "hardness", family = "symmetric", data = rubber)
+```
+
+We can re-use our grid for prediction:
+
+```{r}
+rubber.lo.pred = predict(rubber.lo, newdata = rubber.grid)
+rubber.lo.pred.df = data.frame(rubber.grid, abrasion.loss = as.vector(rubber.lo.pred))
+```
+
+Draw the same colored plot as before:
+
+```{r}
+gg = ggplot(rubber.lo.pred.df, aes(x = tensile.strength, y = abrasion.loss, group = hardness, color = hardness)) + geom_line()
+gg + labs(title="Abrasion loss loess fit vs. tensile strength, by hardness")
+```
+
+We can also reverse the x- and color aesthetics:
+
+```{r}
+gg = ggplot(rubber.lo.pred.df, aes(x = hardness, y = abrasion.loss, group = tensile.strength, color = tensile.strength)) + geom_line()
+gg + labs(title="Abrasion loss loess fit vs. hardness, by tensile strength")
+```
+
+A thinner grid might help...
+
+### Piecewise linear approach
+
+Let's try fitting a piecewise function in tensile strength, such that the relationship with abrasion loss is linear below 180 and constant above 180. We still want to fit using `lm()` or `rlm()`, so we rewrite as a linear model by transforming tensile strength to "tensile strength below 180." You could do this by applying a function:
+
+```{r}
+ts.low = function(x){
+  return((x - 180) * (x < 180))
+}
+```
+
+(In fact, we didn't need to do this, because we have a variable called `ts.low` in our `rubber` data frame already.)
+
+Because there appear to be some outlying points in our data set, we prefer to fit using `rlm()` rather than `lm()`.
+
+```{r}
+library(MASS)
+rubber.rlm = rlm(abrasion.loss ~ hardness + ts.low(tensile.strength), data=rubber, psi=psi.bisquare)
+```
+
+To visualize the fitted surface, we want to plot a set of predictions for a grid of different values of hardness and tensile strength.
+
+```{r}
+rubber.grid = expand.grid(hardness=c(54,64,74,84), tensile.strength=c(144,162,180,198))
+rubber.predict = predict(rubber.rlm, newdata=rubber.grid)
+```
+
+Suppose we want to see how the fit depends on tensile strength, conditioning on different values of hardness. One way to do this is to do coplots:
+
+```{r}
+gg = ggplot(data.frame(rubber.grid, fit=as.vector(rubber.predict)), aes(x=tensile.strength, y=fit)) + geom_line() + facet_grid(~hardness)
+gg + labs(title="Abrasion loss fit conditional on hardness")
+```
+
+Alternatively, we can plot all the lines on the same graph, and distinguish between them by color:
+
+```{r}
+gg = ggplot(data.frame(rubber.grid, fit=as.vector(rubber.predict)), aes(x=tensile.strength, y=fit, group=hardness, color=factor(hardness))) + geom_line()
+gg + scale_color_manual(values = cb_palette)
+```
+
+In both plots, we see that the fit becomes horizontal at 180, as we specified. Since there was no interaction in our model, the lines below 180 have the same slope.
+
+We also want to plot the fit as a function of hardness, conditioning on different values of tensile strength. Again, we can use coplots or color.
+
+```{r}
+gg = ggplot(data.frame(rubber.grid, fit=as.vector(rubber.predict)), aes(x=hardness, y=fit)) + geom_line() + facet_grid(~tensile.strength)
+gg + labs(title="Abrasion loss fit conditional on tensile strength")
+ggplot(data.frame(rubber.grid, fit=as.vector(rubber.predict)), aes(x=hardness, y=fit, group=tensile.strength, color=factor(tensile.strength))) + geom_line() + scale_color_manual(values = cb_palette)
+```
+
+Note that on the second plot, the line for 198 is right on top of the line for 180 -- beyond 180, it doesn't make any difference what tensile strength is (according to our model.) Other than the, we just have parallel lines, which is what you should get from a linear model with no interaction.
+
+Of course, you could always just print out the numerical summary:
+
+```{r}
+summary(rubber.rlm)
+```
+
+### Exploring the residuals
+
+Let's refit the same model as above, only this time for convenience, we'll use the `ts.low` variable in `rubber`.
+
+```{r}
+rubber.rlm2 = rlm(abrasion.loss ~ hardness + ts.low, data=rubber, psi=psi.bisquare)
+```
+
+We now want to collect everything we might want to use in residual plotting -- the original variables, cut versions of the variables, as well as the residuals themselves -- in one data frame.
+
+```{r}
+tensile.strength = rubber$tensile.strength
+tensile.cat = cut_number(tensile.strength, n=3)
+hardness = rubber$hardness
+hard.cat = cut_number(hardness, n=3)
+residual.loss = residuals(rubber.rlm2)
+rubber.rlm2.df = data.frame(tensile.strength, tensile.cat, hardness, hard.cat, residual.loss)
+```
+
+As always, we examine the residuals to look for weaknesses in our fit. First, plot the residuals as a function of tensile strength, then add a gam or loess smoother.
+
+```{r}
+ggplot(rubber.rlm2.df, aes(x=tensile.strength, y=residual.loss)) + geom_point() + geom_smooth(method = "gam", formula = y ~ s(x)) + geom_abline(slope=0)
+```
+
+Those outliers on the left are pretty big... Putting those aside, the rest of the residuals seem randomly scattered about the zero line.
+
+We repeat this with hardness as the explanatory variable:
+
+```{r}
+ggplot(rubber.rlm2.df, aes(x=hardness, y=residual.loss)) + geom_point() + geom_smooth(method = "gam", formula = y ~ s(x)) + geom_abline(slope=0)
+```
+
+This time the three problematic points have shifted to the right. Once again, the rest of the observations look like random noise. So far, the fit seems to be a good guess despite the handful of outliers.
+
+We also want to look at coplots of the residuals. We break up the data into three categories of hardness, then for each category, plot the residuals against tensile strength, adding a linear smooth.
+
+```{r}
+gg = ggplot(rubber.rlm2.df, aes(x=tensile.strength, y=residual.loss)) + geom_point() + geom_smooth(method = "lm") + geom_abline(slope=0) + facet_grid(~hard.cat)
+gg + labs(title="Abrasion loss residuals split by hardness")
+```
+
+This looks less good. The residual coplots for soft and medium-hardness both looks like they slope downward somewhat. The residual coplot for the hardest specimens is bent out of shape by the three outliers on the left.
+
+Now look at coplots that condition on tensile strength.
+
+```{r}
+gg = ggplot(rubber.rlm2.df, aes(x=hardness, y=residual.loss)) + geom_point() + geom_smooth(method = "lm") + geom_abline(slope=0) + facet_grid(~tensile.cat)
+gg + labs(title="Abrasion loss residuals split by tensile strength")
+```
+
+We get a similar problem in the opposite direction. The low-strength graph (left) shows the high-hardness outliers distorting the picture. In the other two panels, the trend is upward, and the slope doesn't seem to be the same in the two plots.
+
+There are enough problems that we should try to improve our model. See the notes for an approach that drops the outliers and includes an interaction.
+
+

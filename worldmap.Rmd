@@ -1,0 +1,60 @@
+---
+title: "Using shapefiles: Natural Earth"
+author: "S470/670"
+date: "3/7/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, message = FALSE}
+library(tidyverse)
+library(broom)
+library(viridis)
+```
+
+I'm mostly following this: https://cengel.github.io/rspatial/4_Mapping.nb.html
+
+Get data:
+
+http://www.naturalearthdata.com/downloads/10m-cultural-vectors/
+
+Read data as a SpatialPolygonsDataframe:
+
+```{r}
+library(rgdal)
+world = readOGR(dsn = "ne_10m_admin_0_countries", layer = "ne_10m_admin_0_countries")
+names(world)
+```
+
+Create a data frame:
+
+```{r}
+world.df = tidy(world)
+head(world.df)
+```
+
+Re-merge stuff:
+
+```{r}
+world$polyID = sapply(slot(world, "polygons"), function(x) slot(x, "ID"))
+world.df = merge(world.df, world, by.x = "id", by.y = "polyID")
+head(world.df)
+```
+
+Plot:
+
+```{r}
+ggplot() + geom_polygon(data = world.df,
+  aes(x = long, y = lat, group = group, fill = INCOME_GRP)) +
+  scale_fill_viridis("Income group", discrete = TRUE) +
+  ggtitle("World income") +
+  theme(line = element_blank(),
+        axis.text=element_blank(),
+        axis.title=element_blank(),
+        panel.background = element_blank()) +
+  coord_equal()
+```
+

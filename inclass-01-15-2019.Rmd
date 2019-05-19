@@ -1,0 +1,72 @@
+---
+title: "In-class 1/15/19"
+author: "S670"
+date: "1/15/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, tidy = TRUE)
+```
+
+Look at heights of the NY Choral Society (`singer` in `lattice`):
+
+```{r}
+library(lattice)
+library(tidyverse)
+```
+
+```{r}
+tenors = subset(singer, voice.part %in% c("Tenor 1", "Tenor 2"))
+summary(tenors)
+nrow(tenors)
+```
+
+Plot the distribution of tenor heights:
+
+```{r}
+ggplot(tenors, aes(x = height)) + geom_dotplot(binwidth = 1)
+```
+
+Histograms:
+
+```{r}
+ggplot(tenors, aes(x = height)) + geom_histogram(breaks = seq(63.5, 76.5, 1)) +
+  ggtitle("Heights of 42 tenors") + labs(subtitle = "Quartiles: 68, 69, 71 inches; vertical line shows mean") +
+  geom_vline(xintercept = mean(tenors$height), col = "blue")
+```
+
+Look at all singers' heights:
+
+```{r}
+summary(singer)
+ggplot(singer, aes(x = height)) + geom_histogram(binwidth = 1)
+```
+
+Density plot:
+
+```{r}
+ggplot(singer, aes(x = height)) + geom_density() +
+  labs(subtitle = "Quartiles: 65, 67, 70 inches")
+```
+
+Draw a (normal) QQ plot:
+
+```{r}
+ggplot(singer, aes(sample = height)) + stat_qq()
+```
+
+Uniform QQ plot:
+
+```{r}
+ggplot(singer, aes(sample = height)) + stat_qq(distribution = qunif)
+```
+
+ECDF plot:
+
+```{r}
+ggplot(singer, aes(x = height)) + stat_ecdf() +
+  ylab("Proportion of singers this height or shorter")
+```
+
+

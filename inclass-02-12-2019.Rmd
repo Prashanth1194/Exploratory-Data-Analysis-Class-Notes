@@ -1,0 +1,170 @@
+---
+title: "In—class 2/12/19"
+author: "S670"
+date: "2/12/2019"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, tidy = TRUE, message = FALSE)
+```
+
+```{r}
+library(tidyverse)
+library(lattice)
+cb_palette = c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+```
+
+## Using weights: Immigrants and income
+
+Can the income of children of immigrants be explained by the income of the father's country and by education? This example comes from David Shor from Civis Analytics. He posted his code here:
+
+https://gist.github.com/davidshor/3eb4c47b4e2e0d9bfbad2c656a0b58cf
+
+It's of interest if you want to know how to use SQL statements within R. We'll just start from the data frame created on line 79. The file `immigrants.txt` contains the following variables:
+
+- `recode`: father's country of origin
+- `count`: number of individuals whose father had that country of origin
+- `has_bachelor_degree` as a proportion
+- `personal_income`
+- `gdp_per_capita_ppp` of the father's country
+
+```{r}
+immigrants = read.table("immigrants.txt", header = TRUE)
+summary(immigrants)
+```
+
+### Exploring the data
+
+Let's first do a standard pairs plot of the data.
+
+```{r}
+library(GGally)
+ggpairs(immigrants, columns = c("personal_income", "has_bachelor_degree",  "gdp_per_capita_ppp"))
+```
+
+GDP is strongly right-skewed, but personal income isn't really, and it would be weird to take the log of GDP but not of income. We'll start out without transformations but might change our minds.
+
+The bigger issue is that the counts are very different between countries. You might argue that if you're fundamentally interested in the *countries*, you don't need weights, but it seems weird to count 31 children of Singaporean fathers and 35,000 children of Mexican fathers equally. We should check if weighting actually makes a difference:
+
+```{r}
+mean(immigrants$personal_income)
+weighted.mean(immigrants$personal_income, immigrants$count)
+```
+
+This is a big enough difference that it will matter whether or not we weight. Let's say we decide that we will.
+
+We now draw scatterplots such that (i) the area of the point is proportional to the count, and (ii) the smoother finds a weighted fit. The `size` and `weight` aesthetics take care of these respectively. We'll try degree 1 and 2 loess, as well as a GAM.
+
+```{r}
+gg = ggplot(immigrants, aes(x = gdp_per_capita_ppp, y = personal_income)) + geom_point(aes(size = count)) + geom_smooth(aes(weight = count), method.args = list(degree = 1), se = FALSE) + geom_smooth(aes(weight = count), color = 'orange', se = FALSE) + geom_smooth(method = 'gam', formula = y ~ s(x), aes(weight = count), color = 'grey', se = FALSE)
+gg + labs(subtitle = "Blue is degree 1 loess, orange is degree 2 loess, grey is GAM")
+```
+
+The "tick" shape of the degree 1 loess is awkward, because there isn't really any reason to suspect an underlying nonmonotonic relationship, and it's not clear that additional smoothing will help. The default degree 2 loess is worse and the gam is nonsense (GAM often doesn't handle weights well), so we won't pursue it.
+
+If which country is at which point is of high interest, we can text labels instead. Resizing the labels is controversial (as the text area will no longer be proportional to the count) but it does emphasize the countries with more observations, which is what you want.
+
+```{r}
+gg = ggplot(immigrants, aes(x = gdp_per_capita_ppp, y = personal_income)) + geom_text(aes(label = recode, size = sqrt(count)), alpha = 0.75)
+gg + geom_smooth(aes(weight = count), method.args = list(degree = 1))
+```
+
+The "tick" shape is mostly or entirely due to Mexico. In the context of U.S. immigration, you might declare Mexico a special case and drop it. But it's not exactly optimal to drop a third of your data from your analysis.
+
+Perhaps a log-log helps?
+
+```{r}
+ggplot(immigrants, aes(x = gdp_per_capita_ppp, y = personal_income)) + geom_point(aes(size = count)) + scale_x_log10() + scale_y_log10() + geom_smooth(aes(weight = count), method.args = list(degree = 1))
+```
+
+It does a little bit: the amount of nonmonotonicity is now pretty small.
+
+Now plot log income against education:
+
+```{r}
+ggplot(immigrants, aes(x = has_bachelor_degree, y = personal_income)) + geom_point(aes(size = count)) + scale_y_log10() + geom_smooth(aes(weight = count), method.args = list(degree = 1))
+```
+
+The curve flattens out when the percent with a bachelor's gets beyond about 38%.
+
+Now we draw faceted plots. For interpretability, we can choose our own cut points, roughly corresponding to quartiles of the variables, heavily rounded.
+
+```{r}
+gg = ggplot(immigrants, aes(x = gdp_per_capita_ppp, y = personal_income)) + geom_point(aes(size = count)) + scale_x_log10() + scale_y_log10() + geom_smooth(aes(weight = count), method.args = list(degree = 1)) + facet_grid(~cut(has_bachelor_degree, c(0, 0.2, 0.3, 0.4, 0.7)))
+gg + ggtitle("Log personal income vs. log country GDP") + labs(subtitle = "Cut by percent with Bachelor's degree")
+```
+
+Whatever's going on here, it doesn't appear to be a simple additive shift. So fitting a model with an interaction will be safer.
+
+```{r}
+gg = ggplot(immigrants, aes(x = has_bachelor_degree, y = personal_income)) + geom_point(aes(size = count)) + scale_y_log10() + geom_smooth(aes(weight = count), method.args = list(degree = 1)) + facet_grid(~cut(gdp_per_capita_ppp, c(0, 10000, 20000, 30000, 100000)))
+gg + ggtitle("Log personal income vs. percent with Bachelor's degree") + labs(subtitle = "Cut by country GDP per capita")
+```
+
+Note that there's a big region of the predictor space where we don't have any data (low GDP, high education.) So we shouldn't attempt to draw conclusions about this region.
+
+### Modeling the data
+
+We fit a weighted degree 1 loess, which necessarily involves an interaction. (If we wanted a nonparametric model without an interaction we'd fit a **generalized additive model (GAM)** instead.)
+
+```{r}
+immigrants.lo = loess(log10(personal_income) ~ log10(gdp_per_capita_ppp) * has_bachelor_degree, weights = count, degree = 1, data = immigrants)
+```
+
+We set up a grid to do prediction. We'll first plot the fit against education and condition on GDP. That requires a grid that's dense in education but sparse in GDP. We also note we have little data for very high education and low GDP, so we remove predictions in that range (let's say lower GDP and higher education than India.)
+
+```{r}
+newdata1 = expand.grid(has_bachelor_degree = seq(0.06, 0.65, 0.01), gdp_per_capita_ppp = c(5000, 10000, 20000, 50000))
+immigrants.pred1 = predict(immigrants.lo, newdata = newdata1)
+immigrants.pred1 = data.frame(newdata1, predicted_log10_income = as.vector(immigrants.pred1))
+immigrants.pred1 = immigrants.pred1[immigrants.pred1$has_bachelor_degree <= 0.5 | immigrants.pred1$gdp_per_capita_ppp >= 7200,]
+ggplot(immigrants.pred1, aes(x = has_bachelor_degree, y = predicted_log10_income, group = gdp_per_capita_ppp, color = factor(gdp_per_capita_ppp))) + geom_line() + scale_color_manual(values = cb_palette) + labs(color = "GDP per capita (PPP)")
+```
+
+The curves get a little closer as the percent with a bachelor's increases, suggesting that in some sense as education goes up, what country your father is from matters a bit less to your (log) income.
+
+To plot our fit with education as our main x-variable, we use a grid dense in education and sparse in GDP:
+
+```{r}
+newdata2 = expand.grid(has_bachelor_degree = seq(0.1, 0.5, 0.1), gdp_per_capita_ppp = 10 ^ seq(2.7, 4.9, 0.1))
+immigrants.pred2 = predict(immigrants.lo, newdata = newdata2)
+immigrants.pred2 = data.frame(newdata2, predicted_log10_income = as.vector(immigrants.pred2))
+gg = ggplot(immigrants.pred2, aes(x = gdp_per_capita_ppp, y = predicted_log10_income, group = has_bachelor_degree, color = factor(has_bachelor_degree))) + scale_x_log10() + geom_line() + scale_color_manual(values = cb_palette)
+gg + labs(color = "Proportion with Bachelor's degree")
+```
+
+Again the curves converges toward the right hand side.
+
+### Residuals
+
+Fits on our residual plots should again be weighted.
+
+```{r}
+immigrants.lo.df = data.frame(immigrants, .resid = residuals(immigrants.lo))
+gg = ggplot(immigrants.lo.df, aes(x = gdp_per_capita_ppp, y = .resid))
+gg = gg + geom_point(aes(size = count)) + scale_x_log10()
+gg = gg + geom_smooth(aes(weight = count), method.args = list(degree = 1))
+gg
+gg + facet_grid(~cut(has_bachelor_degree, c(0, 0.2, 0.3, 0.4, 0.7)))
+```
+
+The conditional residual plots for the midrange education levels wiggle around a bit more than I would like. That suggests decreasing the span of the loess below the default of 0.75. However, decreasing it too much might make weird stuff happen in the fit (e.g. strong non-monotonicity.)
+
+```{r}
+gg = ggplot(immigrants.lo.df, aes(x = has_bachelor_degree, y = .resid)) + geom_point(aes(size = count)) + geom_smooth(aes(weight = count), method.args = list(degree = 1))
+gg
+gg + facet_grid(~cut(immigrants$gdp_per_capita_ppp, c(0, 10000, 20000, 30000, 100000)))
+```
+
+You can try adding a `span = ...` argument into the call to the loess fit, knitting this Markdown, and seeing what difference this makes.
+
+Since we're fitting a complex model with weird data, it doesn't seem especially informative to check homoskedasticity and normality. We should check how much variance we've captured:
+
+```{r}
+var(fitted.values(immigrants.lo))
+var(residuals(immigrants.lo))
+```
+
+Our model has captured about two-thirds of the variation in log income (but note this is after aggregation; we would have captured much, much less than two-thirds of the variation in log income among individuals.)
+

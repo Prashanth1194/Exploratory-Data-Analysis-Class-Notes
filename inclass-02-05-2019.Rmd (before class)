@@ -1,0 +1,226 @@
+---
+title: "In-class 2/5/19"
+author: "S670"
+date: "2/5/2019"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, tidy = TRUE)
+```
+
+Load the usual:
+
+```{r message = FALSE}
+library(tidyverse)
+library(lattice)
+cb_palette = c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+```
+
+## Trivariate data: Ethanol
+
+**READ: Cleveland pp. 188--190, 196--199, 214--217, 254--255.**
+
+The data frame `ethanol` in the `lattice` package contains three measurements from 88 runs of an experiment testing an ethanol-fueled engine:
+
+- `NOx`: the amount of oxides of nitrogen produced by the engine per unit of work, in micrograms per joule (the response.)
+- `C`: the compression ratio the engine was set at.
+- `E`: the equivalence ratio the engine was set at (a measure of how fuel is in the fuel-air mixture.)
+
+We first plot the pairwise relationships using `ggpairs()` in the `GGally` package.
+
+```{r}
+
+```
+
+Some features are immediately obvious:
+
+- Compression takes only five different values (it was directly controlled in the experiments.)
+- The relationship of NOx as a function of equivalence ratio is non-linear and non-monotonic. (It actually looks kind of like a bell-shaped curve.)
+
+On the other hand, the relationships of equivalence ratio and NOx with compression are not obvious. With five levels of C, we could try boxplots:
+
+```{r}
+
+```
+
+This isn't much clearer. Instead we can try:
+
+- Faceting on one of the explanatory variables
+- Mapping one of the explanatory variables to a color scheme
+
+
+
+### Conditioning on and coloring by compression ratio
+
+Let's first condition on C: since there are only five values, this is more straightforward. For each C, what's the relationship between E and NOx?
+
+```{r}
+
+```
+
+This is very obviously nonlinear, so there's no point in adding an `lm()` fit. Instead, if you don't specify a particular method, `geom_smooth()` will fit a curve:
+
+```{r}
+
+```
+
+The default smoothing method for moderate sample sizes is called **loess**; we won't worry about the details for now and just look at the output.  The shape is very similar across all five plots: the trend is increasing up to a peak at an equivalence ratio of about 0.9, then a decline. It's hard to tell the difference in level (for example, which curve peaks the highest) from these graphs. That kind of comparison would be easier if we plotted all five of these curves on one graph. To make the graph clear, we use a *continuous* color scale. Plot each curve in a different color, where the color varies along a gradient with compression ratio. (We turn off the standard errors for clarity.)
+
+```{r}
+
+```
+
+The lower compression ratios are darker. We can now see the highest values of C give the highest peak value of NOx. Note that the curves aren't simply shifted: they're relatively far apart on the left-hand side and relatively close on the right.
+
+
+
+### Coloring by and conditioning on equivalence ratio
+
+Now let's see how the relationship between C and NOx varies with E. Color the points according to E.
+
+```{r}
+
+```
+
+This is a bit hard to read. A nonlinear relationship gives us an excuse to use a more dramatic color scheme. The `viridis` package is a good choice:
+
+```{r}
+
+```
+
+As we saw before, for low E (purple/blue), NOx is low; for middling E (green), NOx is high; and for high E (yellow), NOx is low again. However, it's still hard to see how the relationship with C changes.
+
+With these complex relationships, faceting may be a better choice than color. To facet, we need to "cut" the continuous variable `E` into pieces, and draw a panel for each piece. Let's cut E into six classes, using the `cut_number()` function. By putting this inside `facet_wrap()`, we'll plot six scatterplots of NOx against C. It turns out a linear fit seems adequate:
+
+```{r}
+
+```
+
+Once again, middling E's give the highest NOx. However, now we can also see that the slope is steepest for a fairly low E, then decreases until the line for the highest E is basically flat.
+
+
+
+
+### Fitting and visualizing a model
+
+So far we've found:
+
+- Conditional on equivalence ratio, NOx depends on concentration in an approximately linear way.
+- Conditional on concentration, NOx depends on equivalence ratio in a non-monotonic way (i.e. it goes up and then it goes down.)
+
+Conditioning on E gives the simpler structure: then NOx is just a linear function of C. However, we still need an interaction between C and E.
+
+If you like parametric models, you could try:
+
+```{r}
+
+```
+
+Instead, we'll pursue a **semiparametric** model. `loess(NOx ~ C * E...)` by default would fit a smooth two-dimensional surface to predict NOx, but wouldn't have the conditional linearity. To achieve this, we use the `parametric` argument to specific a parametric model in C, and the `drop.square` argument to give a linear term in C rather than the default quadratic. After some (actually a lot) of trial and error, we find a span of $1/3$ looks okay. Because we have possible outlier problems, we specify `family = "symmetric"` instead of using a least squares-based solution.
+
+```{r}
+
+```
+
+For display, create a grid of C and E points, then predict the NOx at each point on this grid.
+
+```{r}
+
+```
+
+We can plot lines for different values of E on the same graph in different colors, but it gets a bit crowded.
+
+```{r}
+
+```
+
+A faceted plot of the fit faceted by values of E "spreads out" the above graph.
+
+```{r}
+
+```
+
+This is much clearer (and makes the graph before this one much easier to understand as well.) In addition to the higher values for E around 0.9, the slope varies with E as well. The steepest slope looks to be at around E = 0.8.
+
+We now draw faceted plots of the fit conditioning on the compression ratio. Because of the nonlinearity, we need a tightly packed grid in E. It makes sense to use the five values of C from the experiment.
+
+```{r}
+
+```
+
+The general shape is similar for all five curves. As with the raw data, the curves are separated for low E (with high C giving higher NOx), but come together for high E.
+
+### Exploring the residuals
+
+Let's first look at the numerical summary of the model.
+
+```{r}
+
+```
+
+I don't know about you, but that's not very useful to me. Instead, let's construct a data frame with the original variables and the residuals, and get plotting. A good smoother for residual plots (when there's a reasonable amount of data) is a **spline**, fitted via a gam in `geom_smooth()`:
+
+```{r}
+
+```
+
+There's no obvious sign of a relationship between the residuals and the equivalence ratio. Now plot the residuals against compression. (`gam` doesn't work here because there are only five different values of C, so fit a loess instead.)
+
+```{r}
+
+```
+
+The residuals for $C = 9$ are a little concerning: they do seem to be centred a little above zero. While this could be due to nonlinearity, it could also be measurement error or just the one large positive residual. To investigate further, let's condition on C and look at the relationship between the residuals and the equivalence ratio.
+
+```{r}
+
+```
+
+There doesn't seem to be any systematic relationship in the trends of the slopes. The outliers present a minor problem, but if you ignore them there doesn't seem to be too much pattern in the residuals. The fit is probably adequate.
+
+### Checking the residuals
+
+We now do the boring stuff. Check for homoskedasticity:
+
+```{r}
+
+```
+
+The trend in this plot is reasonably consistent with a horizontal line. There's negligible evidence of heteroskedasticity.
+
+Next, check normality:
+
+```{r}
+
+```
+
+The outliers means the residuals aren't normal, so we should hesitate to make probabilistic statements. Oh well. 
+
+Finally, did we manage to explain anything?
+
+```{r}
+
+```
+
+The model captures 97-98% of the variation in the NOx measurements (depending on your definition of $R^2$.)
+
+### Should we have transformed?
+
+We can try out a log transformation and see if it does any better. Let's skip to the residuals and check for homoskedasticity:
+
+```{r}
+
+```
+
+The spread of the residuals decreases as the fitted values increase. The log fit does worse than the fit on the original scale.
+
+We conclude:
+
+- NOx depends on equivalence ratio in a non-monotonic way.
+- Conditional on equivalence ratio, NOx depends on concentration in an approximately linear way.
+- The interaction is important: there's no real way to remove it from the data.
+- The usual inference based on an assumption of normal errors is inappropriate.
+- Transformations don't appear to help and may make things worse.
+
+

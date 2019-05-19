@@ -1,0 +1,300 @@
+---
+title: "In-class 3/26/19"
+author: "S670"
+date: "3/26/2019"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, tidy = TRUE, message = FALSE)
+library(plyr)
+library(tidyverse)
+cb_palette = c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+cbp = function(){scale_color_manual(values = cb_palette)}
+```
+
+
+
+## Regression with lots of predictors
+
+**Optional reading:** Ch. 3.4 of the Elements of Statistical Learning.
+
+In this section, we'll consider situations with "lots" of predictors, where lots might mean ten or twenty (but not the "$p > n$" situation with more predictors than observations, which presents a distinctive set of challenges.) In this situation, where prediction is not the goal (or at least not the only goal), there may be no single "best" model. Rather, different models might give you different insights about the data.
+
+### Prostate cancer
+
+The `prostate` data set in the `ElemStatLearn` package contains measurements of 97 men suffering from prostate cancer.
+
+```{r}
+# install.packages("ElemStatLearn")
+library(ElemStatLearn)
+data(prostate)
+summary(prostate)
+apply(prostate, 2, sd)
+```
+
+The response is `lpsa`, the log of "prostate specific antigen," a protein which is often at an elevated level in prostate cancer sufferers. There are also eight predictor variables (and an indicator `train` which we'll disregard.)
+
+Draw a pairs plot (omitting `train`):
+
+```{r, cache = TRUE}
+library(GGally)
+ggpairs(prostate[, 1:9])
+```
+
+`lpsa` seems to be related to most of the other variables. It seems to have a reasonably symmetric distribution, so we won't transform further. (You could make arguments for transforming some of the predictors,but for simplicity, we won't.)
+
+Eight predictors is getting toward the borderline where we need to use variable selection or regularization to avoid overfitting. But first, let's start by throwing all the predictors into a linear model.
+
+### Full linear model
+
+Because there are lots of variables and I don't know much about prostate cancer, I'll rescale the variables so they all have mean 0 and SD 1, to allow easy comparison of their coefficients. (I prefer to not standardize the response.) Then we'll fit a full linear model, with all eight predictors.
+
+```{r}
+predictors.scaled = scale(prostate[, 1:8])
+lpsa = prostate$lpsa
+prostate.lm = lm(lpsa ~ predictors.scaled)
+```
+
+As we've seen, the `summary()` function gives a bit of a mess, and that only gets worse as the number of predictors increases. Instead, we can use the `tidy()` function in `broom` to create a nice data frame of coefficients and their confidence intervals.
+
+```{r}
+library(broom)
+prostate.lm.tidy = tidy(prostate.lm, conf.int = TRUE)
+# Go back to original names
+prostate.lm.tidy[2:9, 1] = names(prostate)[1:8]
+data.frame(prostate.lm.tidy[,1], round(prostate.lm.tidy[,-1], 2))
+```
+
+The standard errors of the coefficients are of similar magnitude. The biggest coefficient is for `lcavol` (log cancer volume.) Since the predictors are scaled and response is a natural log, small coefficients (of the order of 0.1 or 0.2) can be interpreted as the proportion change in the prediction unlogged response if the predictor is one SD higher. So if age were one SD higher (about 7.5 years) and everything else was constant, the model's predicted PSA would be about 16% lower.
+
+We can also draw a **TIE fighter plot** of the coefficients (that might be a name I just made up):
+
+```{r}
+ggplot(prostate.lm.tidy[-1,], aes(x = estimate, y = term, xmin = conf.low, xmax = conf.high, color = term)) + geom_point() + geom_errorbarh() + geom_vline(xintercept = 0) + cbp() + guides(color = FALSE)
+```
+
+Without worrying too much about significance, we see that some of the coefficients are very small compared to their margins of error. We should thus consider a model with fewer predictors.
+
+## All subsets
+
+There are lots of ways to do variable selection. An old-school method is to do **stepwise** selection, but this has the fairly major weakness that it doesn't always choose the best model of a given size, let alone the right model. In fact, given a half-decent laptop, there's no difficulty in looking at *all* subsets of eight predictor variables, and finding the best (i.e. lowest squared error) subset for each size. `regsubsets()` in the `leaps` package does this for you. We run it on the unscaled data (excluding the `train` variable.)
+
+```{r}
+# install.packages("leaps")
+library(leaps)
+prostate.leaps = regsubsets(lpsa ~ . - train, data = prostate)
+summary(prostate.leaps)$which
+```
+
+So we see that for example, the best 3-predictor model includes `lcavol`, `lweight`, and `svi`. (Note that if we only want to find the best models, it doesn't matter whether we run `regsubsets()` with the scaled or unscaled predictors.) We see that the best models for each size form a nested sequence, so a greedy algorithm would've worked here.
+
+Now we can build up our understanding of the data by drawing plots, adding variables sequentially and checking for nonlinearity and interactions as we've done throughout the course. Start with log cancer volume as a single predictor:
+
+```{r}
+ggplot(prostate, aes(x = lcavol, y = lpsa)) + geom_point() + geom_smooth()
+```
+
+The relationship seems reasonably close to linear here -- we could draw a straight line entirely within the confidence band. If there was more curvature, I'd throw the model out and start from scratch using a nonparametric approach.
+
+Now facet by log weight:
+
+```{r}
+ggplot(prostate, aes(x = lcavol, y = lpsa)) + geom_point() + geom_smooth(span = 1) + facet_grid(~ cut_number(lweight, n=3))
+```
+
+There's an intriguing hint of nonlinearity here -- the log PSA prediction increases more and more quickly with log cancer volume, but only for the heavy patients. With lots of data, we could switch to a multipredictor loess here, but since our sample is small, let's first see if this pattern shows up in other graphs.
+
+Next, condition on `svi` (seminal vesicle invasion) which if present, indicates the cancer is advanced. Since this is a binary variable, we can make it a factor and distinguish it with color. However, as only 21 individuals in the data set have SVI, the number of facets we can show becomes limited, and it's hard to fit curves instead of lines.
+
+```{r, warning = FALSE}
+prostate$svi = recode(prostate$svi, `1` = "Yes", `0` = "No")
+ggplot(prostate, aes(x = lcavol, y = lpsa, group = svi, color = svi)) + geom_point() + geom_smooth(method = "lm", se = FALSE) + facet_wrap(~ cut_number(lweight, n=2)) + scale_color_manual(values = cb_palette)
+```
+
+There's not much hint of nonlinearity here. However, the lines on the right panel are far from parallel, so we should keep the possibility of an interaction in mind.
+
+Now facet again on `lbph`, "log benign prostatic hyperplasia amount":
+
+```{r}
+ggplot(prostate, aes(x = lcavol, y = lpsa, group = svi, color = svi)) + geom_point() + geom_smooth(method = "lm", se = FALSE) + facet_wrap(~ cut_number(lweight, n=2) + cut(lbph, breaks = c(-2, -1, 3))) + cbp()
+```
+
+It's getting harder to be confident about an interaction: the blue lines vary in slope, but there's based on very small samples. The red lines have different heights but are similar in slope.
+
+In EDA we're not always required to find a "best" model, and even if we were we can decide on what best means subjectively. So if you wanted to fit a linear model with `lcavol`, `lweight`, and `svi` as predictors plus interactions, you're free to do so and then call that "best" because of the complexity you can get out of a relatively small number of variables. On the other hand, if you want a (somewhat) objective decision for "best", you can just find the model that optimizes your favorite criterion. For example, if you like Mallow's $C_p$:
+
+```{r}
+summary(prostate.leaps)$cp
+```
+
+the best model is the five-predictor one:
+
+```{r}
+tidy(lm(lpsa ~ lcavol + lweight + svi + lbph + age, data = prostate))
+```
+
+Note, however, that the standard errors and $P$-values are wrong -- we selected the model *because* it fitted the data well, so the goodness-of-fit will be overestimated. If in doubt, bootstrap.
+
+## If prediction is a major goal
+
+If prediction is a major goal (in addition to interpretation), there are lots of modern techniques to consider, such as principal components regression, ridge regressions, and Lasso. These are technically beyond the scope of this course and you should really go read *Elements of Statistical Learning*, but we briefly discuss some of them.
+
+### Principal components regression
+
+Model selection methods of the kind shown above can be unstable and noisy, and generally give suboptimal prediction. A method that works very well for prediction is **principal components regression (PCR)**: fit a PCA on the predictors (usually scaled), then regress the response on the first $k$ principal components.
+
+```{r}
+predictors.pc = prcomp(predictors.scaled)
+prostate.pcr = lm(lpsa ~ predictors.pc$x[, 1:4])
+tidy(prostate.pcr)
+```
+
+(If you really care about prediction, choose $k$ by cross-validation.) While the predictive accuracy of PCR is often shockingly good (provided the data is well-behaved), it's extremely finicky to interpret -- once you transform back to the original predictors, there's no sparsity. So we don't use it for EDA much. But if you ever want to, the implementation people seem to like is in the `caret` package.
+
+### Ridge regression
+
+Ridge regression is closely related to (a smoothed version of) PCR, but it's easier to introduce as a form of *penalized* regression. We find coefficients $\beta_j$ that minimize
+
+$$
+\sum_i\left(y_i - \beta_0 - \sum_{j=1}^p \beta_j x_{ij}\right)^2 + \lambda \sum_{j=1}^p \beta_j^2
+$$
+
+where $\lambda$ is a tuning parameter. In practice, this means the coefficients **shrink** toward zero, reducing variance at the expense of a little bias. Note that this criterion usually only makes sense if the predictors are scaled.
+
+The `linearRidge` function in package `ridge` fits ridge regression, choosing $\lambda$ via a method by Cule and De Iorio.
+
+```{r}
+# install.packages("ridge")
+library(ridge)
+prostate.ridge = linearRidge(lpsa ~ predictors.scaled)
+summary(prostate.ridge)
+```
+
+As with PCR, no predictors are dropped, but we can check that the sum of squared coefficients (excluding the intercept) has shrunk compared to the full model:
+
+```{r}
+sum(coef(prostate.lm)[-1]^2)
+sum(coef(prostate.ridge)[-1]^2)
+```
+
+The model is still hard to understand, but we can draw pictures of the fitted values and data.
+
+```{r}
+prostate.ridge.fitted = predict(prostate.ridge)
+prostate.ridge.resid = lpsa - predict(prostate.ridge)
+prostate.ridge.df = data.frame(predictors.scaled, prostate.ridge.fitted, prostate.ridge.resid)
+names(prostate.ridge.df)[9:10] = c(".fitted", ".resid")
+prostate.ridge.fit.long = prostate.ridge.df %>% gather(variable, std.value, 1:8)
+prostate.ridge.int = coef(prostate.ridge)[1]
+prostate.ridge.coef.df = data.frame(variable = names(prostate)[1:8], coef = coef(prostate.ridge)[-1])
+ggplot(prostate.ridge.fit.long, aes(x = std.value, y = .fitted)) + geom_point() + 
+    facet_wrap(~variable, ncol = 2) + geom_abline(data = prostate.ridge.coef.df, aes(intercept = prostate.ridge.int, slope = coef))
+```
+
+Note that the lines are *not* the least squares lines for each variable; instead, they give the predicted log PSA by value of that variable if all other variables are fixed at their means. Log cancer volume has the steepest slope, while the Gleason score (an ordinal on a ten point scale giving the risk of the cancer spreading) is almost flat.
+
+Now look at the residuals:
+
+```{r, warning = FALSE}
+ggplot(prostate.ridge.fit.long, aes(x = std.value, y = .resid)) + geom_point() + facet_wrap(~variable, ncol = 2) + geom_smooth(method.args = list(degree = 1))
+```
+
+There's no obvious nonlinearity. Our linear model-based methods seem adequate.
+
+### Lasso
+
+The **lasso** gives you both shrinkage and sparsity. We find coefficients $\beta_j$ that minimize
+
+$$
+\sum_i\left(y_i - \beta_0 - \sum_{j=1}^p \beta_j x_{ij}\right)^2 + \lambda \sum_{j=1}^p |\beta_j|
+$$
+
+where $\lambda$ is a tuning parameter. This usually requires shrinking some of the $\beta_j$s to zero.
+
+The two most-used R implementations of the lasso are `lars()` in the package of the same name, and the more general `glmnet` package, which can also fit (cross-validated) ridge regression.
+
+```{r}
+# install.packages("lars")
+library(lars)
+prostate.lasso = lars(as.matrix(predictors.scaled), lpsa)
+prostate.lasso
+```
+
+`lars()` gives a sequence of models that increment the number of predictors. We can look at the first few of these in turn. One predictor:
+
+```{r}
+prostate.lasso.fit = predict.lars(prostate.lasso, newx = predictors.scaled)$fit
+prostate.lasso.df = data.frame(prostate, fit1 = prostate.lasso.fit[,2], fit2 = prostate.lasso.fit[,3], fit3 = prostate.lasso.fit[,4])
+ggplot(prostate.lasso.df, aes(x = lcavol, y = lpsa)) + geom_point() + geom_line(aes(y = fit1))
+```
+
+The first predictor is still log cancer volume. Once again, this isn't the least squares line -- the slope is shrunk toward zero.
+
+Two predictors:
+
+```{r}
+ggplot(prostate.lasso.df, aes(x = lcavol, y = lpsa, group = svi, color = svi)) + geom_point() + geom_line(aes(y = fit2)) + cbp()
+```
+
+This time SVI is the second variable. It doesn't look like the model fits that well at this point (the best model with these two predictors might have an interaction.)
+
+Three predictors:
+
+```{r}
+ggplot(prostate.lasso.df, aes(x = lcavol, y = fit3, group = svi, color = svi)) + geom_point() + facet_grid(~cut_number(lweight, n = 3)) + cbp()
+```
+
+We faceted by (log) weight and plotted fitted values (not raw data.) We see that within each panel, SVI matters but weight doesn't matter much -- perhaps not surprising since each panel contains patients of similar weight.
+
+We can facet on SVI instead:
+
+```{r}
+ggplot(prostate.lasso.df, aes(x = lcavol, y = fit3, color = cut_number(lweight, n = 3))) + geom_point() + facet_grid(~svi) + cbp()
+```
+
+The weight effect is there, since the blue dots (highest weight) are above the green dots, which are above the red dots. But the effect is pretty small.
+
+### Finding the "best" model using glmnet()
+
+If you're required to find a "best" lasso model (or equivalently a "best" tuning parameter $\lambda$,) the `cv.glmnet()` function in `glmnet` can pick one by cross-validation.
+
+```{r, warning = FALSE}
+# install.packages("glmnet")
+library(glmnet)
+prostate.cv = cv.glmnet(as.matrix(predictors.scaled), lpsa)
+coef(prostate.cv, s = "lambda.min")
+```
+
+The model here is optimized for prediction. However, for exploratory work, this often results in an overly complex model. An unrigorous fix is to use the largest $\lambda$ that gives error within one standard error of the minimum. (This is really just an excuse to drop terms, but some people would rather have an excuse than make a subjective decision.)
+
+```{r}
+coef(prostate.cv, s = "lambda.1se")
+```
+
+A dot means the coefficient for that term is set to zero. So we've now got a much simpler model.
+
+We can plot the model against each predictor, setting all other predictors to zero (this only makes sense if the predictors are standardized):
+
+```{r}
+prostate.cv.int = coef(prostate.cv, s = "lambda.1se")[1]
+prostate.cv.fitted = predict(prostate.cv, s = "lambda.1se", newx = as.matrix(predictors.scaled))
+prostate.cv.resid = lpsa - prostate.cv.fitted
+prostate.cv.df = data.frame(predictors.scaled, prostate.cv.fitted, prostate.cv.resid)
+names(prostate.cv.df)[9:10] = c(".fitted", ".resid")
+prostate.cv.fit.long = prostate.cv.df %>% gather(variable, std.value, 1:8)
+prostate.cv.coef.df = data.frame(variable = row.names(coef(prostate.cv, s = "lambda.1se")), coef = as.vector(coef(prostate.cv, s = "lambda.1se")))
+ggplot(prostate.cv.fit.long, aes(x = std.value, y = .fitted)) + geom_point() + facet_wrap(~ variable, ncol = 2) + geom_abline(data = prostate.cv.coef.df[-1,], aes(intercept = prostate.cv.int, slope = coef))
+```
+
+So even though we see the, for example, `lcp` (log capsular penetration) has a moderately strong relationship with the response, we set its coefficient to zero. That is, we hope its relationship with the response is well-explained by the variables we kept. We check this with a residual plot:
+
+```{r, warning = FALSE}
+ggplot(prostate.cv.fit.long, aes(x = std.value, y = .resid)) + geom_point() + facet_wrap(~ variable, ncol = 2) + geom_smooth(method.args = list(degree = 1))
+```
+
+We see that `lcp`, like most of the other variables, has a flat residual plot. However, there's still some slope left in the residuals for the variables we kept in the model (`lcavol`, `lweight`, `svi`) because we shrunk the coefficients. Now to be honest, lasso isn't going to give much of an improvement in prediction over just choosing the best subset, and is going to complicate things in the sense that you have to learn a new bunch of theory to understand what's going on. But if you know the theory, it's a solid choice.
+
+

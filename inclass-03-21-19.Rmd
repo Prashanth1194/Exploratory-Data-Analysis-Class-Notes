@@ -1,0 +1,155 @@
+---
+title: "In-class 3/21/19"
+author: "S670"
+date: "3/19/2019"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, tidy = TRUE, message = FALSE)
+cb_palette = c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+```
+
+## Checking the police stops model
+
+Fit the model from last time:
+
+```{r}
+library(tidyverse)
+frisk = read.table("http://www.stat.columbia.edu/~gelman/arm/examples/police/frisk_with_noise.dat", skip = 6, header = TRUE)
+frisk$eth = recode_factor(frisk$eth, `1` = "black", `2` = "Hispanic", `3` = "white")
+frisk$precinct = factor(frisk$precinct)
+frisk.sum = aggregate(cbind(past.arrests, stops) ~ precinct + eth, sum, data = frisk)
+precinct.glm = glm(stops ~ eth + precinct, family = poisson, offset = log(past.arrests), data = frisk.sum)
+coefficients(summary(precinct.glm))[1:6, 1:2]
+```
+
+We first plot the residuals against the fitted values on the response (original) scale, and see what happens.
+
+```{r}
+precinct.fitted = fitted.values(precinct.glm)
+precinct.resid = residuals(precinct.glm, type = "response")
+precinct.glm.df = data.frame(frisk.sum, .fitted = precinct.fitted, .resid = precinct.resid)
+ggplot(precinct.glm.df, aes(x = .fitted, y = .resid)) + geom_point() + geom_smooth(span = 1, method.args = list(degree = 1))
+```
+
+The smoother we added isn't flat, but that could just be because the residuals are heteroskedastic: they spread out dramatically. The heteroskedasticity is not a bug: Poissons are supposed to be heteroskedastic. Recall that a Poisson$(\lambda)$ random variable has variance $\lambda$ and standard deviation $\sqrt{\lambda}$. So the typical size of the residuals should go up as the square root of the fitted value.
+
+To hopefully remove this effect, we create **standardized residuals** by dividing the raw residuals by the square root of the fitted value. We plot these against the log fitted values to reduce the distortions caused by skewness.
+
+```{r}
+precinct.std.resid = precinct.resid / sqrt(precinct.fitted)
+precinct.glm.df$.std.resid = precinct.std.resid
+ggplot(precinct.glm.df, aes(x = log(.fitted), y = .std.resid)) + geom_point() + geom_smooth(span = 1, method.args = list(degree = 1))
+```
+
+This is better, though far from perfect. There's still some nonlinearity left in the smoother, though the amount is relatively small. If prediction was the goal, a nonparametric model would probably provide an improvement.
+
+### Overdispersion
+
+If you care about more than just the conditional expectation, however, we find a bigger problem. If the Poisson model were correct, the standardized residuals should be on a similar scale to the standard normal -- that is, the vast majority should be within $\pm 2$. From the previous graph, that's clearly not the case.
+
+We need to measure the **overdispersion** in the data. We could do a formal $\chi^2$ test for overdispersion, but instead, let's calculate the typical size of the squared residuals. (When we "average", we divide the sum by the residual degrees of freedom.) If the Poisson model is correct, this should be close to 1. If it's much more than 1, we need a better model.
+
+```{r}
+overdispersion = sum(precinct.std.resid^2) / df.residual(precinct.glm)
+overdispersion
+```
+
+This is much more than 1. In fact, this happens most of the time with count data -- the data is usually more dispersed than the Poisson model.
+
+### How bad is it?
+
+We know there are problems with our model. But are they so bad that we can't draw conclusions from it?
+
+One simple way of checking is to simulate a fake set of data, and see if it closely resembles the actual set. For a Poisson model, this is easy. We know according to the model, each observation is a realization of a Poisson random variable, whose parameter is given by the fitted value. Then we can use `rpois()` to do simulation and do numerical summaries and plots. (Of course, we could repeat the simulation multiple times if necessary, but we'll just do it once.)
+
+```{r}
+sim1 = rpois(nrow(frisk.sum), lambda = fitted.values(precinct.glm))
+summary(frisk.sum$stops)
+summary(sim1)
+sim.df = data.frame(frisk.sum, sim1)
+sim.long = sim.df %>% gather(type, number, stops:sim1)
+ggplot(sim.long, aes(x = number)) + geom_histogram(breaks = seq(0, 2800, 50)) + facet_wrap(~type, ncol = 1)
+```
+
+If we look at the histograms, there doesn't seem to be much difference. But what happens if we fit a model to the simulated data and look at its residuals? We'll find these and do a two-sample QQ plot of them against the original residuals (out of laziness we'll just draw the plot in base R.)
+
+```{r}
+precinct.sim = glm(sim1 ~ eth + precinct, family = poisson, offset = log(past.arrests), data = sim.df)
+qqplot(residuals(precinct.glm, type = "response"), residuals(precinct.sim, type = "response"))
+abline(0, 1)
+```
+
+If the model were correct, this QQ plot should be close to a line through the origin with slope 1. It ain't.
+
+The simulation here is overkill, since we understand the Poisson fairly well and already know the data is overdispersed. However, the more complicated your model gets, the more useful this kind of simulation is as a sanity check.
+
+### Fixing overdispersion 
+
+The quickest fix is to use the **quasipoisson** family instead of the Poisson.
+
+```{r}
+precinct.quasi = glm(stops ~ eth + precinct, family = quasipoisson, offset = log(past.arrests), data = frisk.sum)
+coefficients(summary(precinct.quasi))[1:6, 1:2]
+```
+
+Note that the coefficients look the same as they were in the standard Poisson case. However, their standard errors have been inflated by the square root of their overdispersion. We can confirm that the fitted values haven't changed:
+
+```{r}
+quasi.fitted = fitted.values(precinct.quasi)
+summary(quasi.fitted - precinct.fitted)
+```
+
+So the quasipoission doesn't change the fit, only the variance and the standard errors.
+
+For interpretation, it may be useful to refit the model changing the order of levels in `eth` to use whites as a baseline.
+
+```{r}
+precinct.quasi2 = glm(stops ~ factor(eth, levels = c("white", "black", "Hispanic")) + precinct, family = quasipoisson, offset = log(past.arrests), data = frisk.sum)
+coefficients(summary(precinct.quasi2))[1:6, 1:2]
+```
+
+We now back-transform to get intervals for the stop rates of blacks and Hispanics relative to whites, after adjusting for arrest rates and precinct.
+
+```{r}
+eth.co = coefficients(summary(precinct.quasi2))[1:3, 1:2]
+ethnicity = c("Black", "Hispanic")
+estimate = exp(eth.co[2:3, 1])
+lower = exp(eth.co[2:3, 1] - 2 * eth.co[2:3, 2])
+upper = exp(eth.co[2:3, 1] + 2 * eth.co[2:3, 2])
+eth.co.df = data.frame(ethnicity, estimate, lower, upper)
+ggplot(eth.co.df, aes(x = ethnicity, y = estimate, ymin = lower, ymax = upper)) + geom_pointrange() + ylim(1, 2) + geom_abline(intercept = 1, slope = 0, color = "red") + ylab("Ratio of stop rate to that of whites, adjusted for past arrests and precinct") + ggtitle("Approximate 95% confidence intervals for NYPD stop rates of minorities") + coord_flip()
+```
+
+The confidence intervals don't include 1. This would be consistent with a hypothesis of bias against minorities, though we should think very carefully about other confounding variables before drawing a firm conclusion (e.g. type of crime, which we ignored.) You should check your model very thoroughly. A definitive answer here requires subject matter knowledge in conjunction with statistics.
+
+### Other models
+
+There are lots of alternative approaches:
+
+- **Negative binomial regression** is an alternative to the quasipoisson when the count data is overdispersed. It has the advantage of being a proper probabilistic model, unlike the quasipoisson.
+
+```{r}
+library(MASS)
+precinct.nb = glm.nb(stops ~ eth + precinct + offset(log(past.arrests)), data = frisk.sum)
+coefficients(summary(precinct.nb))[1:6, 1:2]
+```
+
+- Nonparametric approaches like GAM can give you a better fit for the conditional expectation, at the cost of making inference much more complicated. This isn't useful here as apart from the offset, everything is categorical.
+
+- A **mixed model** with precinct treated as a random intercept has appeal here, because of the large number of precincts. Such a model can deal with overdispersion as well as regularize the estimates for the precincts.
+
+```{r}
+library(lme4)
+precinct.glmer = glmer(stops ~ eth + (1 | precinct), family = poisson, offset = log(past.arrests), data = frisk.sum)
+summary(precinct.glmer)
+```
+
+- A **Bayesian model** allows you to put prior distributions on parameters. This is easiest to fit in R using the `rstanarm` package. Note that the `stan_glm()` function is quite verbose, which in my experience quite typical of Bayesians.
+
+```{r, eval = FALSE}
+library(rstanarm)
+precinct.bayes = stan_glm(stops ~ eth + factor(precinct), family = poisson, offset = log(past.arrests), data = frisk.sum, prior = normal(0, 1), prior_intercept = normal(0, 1))
+precinct.bayes
+```

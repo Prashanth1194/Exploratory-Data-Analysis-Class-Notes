@@ -1,0 +1,74 @@
+---
+title: "In-class 1/29/19"
+author: "S670"
+date: "1/29/2019"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, tidy = TRUE, message = FALSE)
+```
+
+```{r}
+library(tidyverse)
+cb_palette = c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+```
+
+Load GDP data:
+
+```{r}
+gdp = read.csv("GDPC1.csv")
+```
+
+Create a time series object:
+
+```{r}
+gdp.ts = ts(data = gdp$GDPC1, start = 1947, frequency = 4)
+library(forecast)
+autoplot(gdp.ts) + scale_y_log10() + geom_smooth()
+```
+
+Check to see if seasonal component has been removed.
+
+Use `decompose()` to fit a fixed seasonal component:
+
+```{r}
+gdp.add = decompose(gdp.ts)
+autoplot(gdp.add)
+```
+
+Try a multiplicative effect:
+
+```{r}
+gdp.multi = decompose(gdp.ts, type = "multiplicative")
+autoplot(gdp.multi)
+```
+
+Using `stl()` lets you fit a time-varying seasonal effect, with the degree of smoothing determined by `s.window` (among other things), which should be a odd number.
+
+```{r}
+gdp.stl = stl(log(gdp.ts), s.window = 49, s.degree = 1)
+autoplot(gdp.stl)
+```
+
+Forget about seasonal effects. Take out the trend:
+
+```{r}
+gdp.df = data.frame(realGDP = as.matrix(gdp.ts), year = time(gdp.ts))
+gdp.lo = loess(log(realGDP) ~ year, data = gdp.df)
+library(broom)
+gdp.lo.df = augment(gdp.lo)
+ggplot(gdp.lo.df, aes(x = year, y = .resid)) + geom_line(alpha = 0.5) + geom_smooth(method = "loess", span = .1, se = FALSE)
+```
+
+
+
+
+
+
+
+
+
+
+
+

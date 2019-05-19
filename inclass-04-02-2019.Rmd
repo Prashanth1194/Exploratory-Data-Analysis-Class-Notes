@@ -1,0 +1,228 @@
+---
+title: "In-class 4/2/19"
+author: "S670"
+date: "4/2/2019"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, tidy = TRUE, message = FALSE)
+library(tidyverse)
+cb_palette = c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+```
+
+## Ordered categorical responses: polr()
+
+**Optional reading: Gelman & Hill pp. 119--123.**
+
+With categorical regression, the main distinction is between models with **ordered** categories and models with **unordered** categories. Let's start with the ordered case.
+
+### Fake data: Grad school
+
+Let's use the (simulated) data on the potential grad school application of college students at 
+
+http://stats.idre.ucla.edu/r/dae/ordinal-logistic-regression/
+
+(I think this is the only fake data example left in this text. Let me know if you have a better real data set. I know there's the diamonds data set but everyone uses that one.) We'll read in the Stata data using `import()` in the `rio` package:
+
+```{r}
+library(rio)
+gradschool = import("https://stats.idre.ucla.edu/stat/data/ologit.dta")
+summary(gradschool)
+```
+
+The data purports to be for 400 juniors asked how likely they are to apply to grad school. `apply` gives a student's intention to apply to grad school, where 0 means unlikely, 1 means somewhat likely, and 2 means very likely. That is, `apply` is an ordered categorical response. Let's explicitly it make a factor:
+
+```{r, warning = FALSE}
+gradschool$Likelihood = recode_factor(gradschool$apply, `0` = "unlikely", `1` = "somewhat likely", `2` = "very likely")
+summary(gradschool)
+```
+
+We'll use `gpa` as our initial explanatory variable. Draw a jittered dot plot using a colorblind-friendly palette:
+
+```{r}
+gg = ggplot(gradschool, aes(x = gpa, y = Likelihood, color = Likelihood)) + geom_jitter(width = 0, height = 0.2)
+gg + ggtitle("Likelihood of applying to grad school") + scale_color_manual(values = cb_palette)
+```
+
+Most students are unlikely to apply to grad school. However, a higher GPA does mean a student is more likely to apply.
+
+It's easy to get a sense of the conditional distribution of `gpa` given `Likelihood`. What we want, however, is the conditional distribution of `Likelihood` given `gpa`. We can get at this by discretizing `gpa`, drawing a histogram, then coloring it by the levels of `Likelihood`:
+
+```{r}
+gg = ggplot(gradschool, aes(x = gpa, fill = Likelihood)) + geom_histogram(breaks = seq(1.8, 4, 0.2)) + ggtitle("Likelihood of applying to grad school")
+gg + scale_fill_manual(values = cb_palette)
+```
+
+Discretizing is arbitrary. If you prefer smooth estimates at the cost of some transparency, you can use stacked density estimates instead:
+
+```{r}
+ggplot(gradschool, aes(x = gpa, ..count.., fill = Likelihood)) + geom_density(position = "stack") + ggtitle("Likelihood of applying to grad school") + scale_fill_manual(values = cb_palette)
+```
+
+The y-axis scale is a bit confusing here, since it's neither a true density nor a count. Instead, the total area is scaled to be equal to the number of observations (400.)
+
+One question these graph don't answer directly: for a given GPA, what proportions of students are unlikely, somewhat likely, and very likely to apply to grad school? Here, instead of *joint* probabilities, we want *conditional* probabilities (conditional on GPA and possibly other variables.) We can use `position = "fill"` to plot conditional density estimates:
+
+```{r}
+ggplot(gradschool, aes(x = gpa, ..count.., fill = Likelihood)) + geom_density(position = "fill") + ggtitle("Likelihood of applying to grad school") + scale_fill_manual(values = cb_palette)
+```
+
+What if we'd prefer to fit a model? The option we'll pursue is **proportional odds logistic regression**, fitted in R using the `polr()` function in `MASS`. Let's first fit the model, then explain what it means.
+
+```{r, message = FALSE}
+library(MASS)
+gpa.polr = polr(Likelihood ~ gpa, data = gradschool)
+library(arm)
+display(gpa.polr)
+```
+
+The model gives us both a **linear predictor** (on a logit scale) and **cutpoints**. The linear predictor is
+
+$$
+0.72 \times \textrm{GPA}
+$$
+
+(Note that the form of the model fitted by `polr()` has no intercept.) To get deterministic predictions, we compare the linear predictor to the cutpoints. The boundary between group 0 (unlikely) and group 1 (somewhat likely) is 2.37, while the boundary between group 1 and group 2 (very likely) is 4.4. (These can be extracted with `gpa.polr$zeta`.) Division tells us that this means a GPA below 3.28 gives a deterministic prediction of "unlikely", a GPA between 3.28 and 6.07 gives a prediction of "somewhat likely", and a GPA of above 6.07 gives a prediction of "very likely." Of course, no one has a GPA above 6.07.
+
+### polr() and probability
+
+Let's move on to probabilistic predictions. The errors in this model have a standard logistic distribution (i.e. with mean zero and scale parameter 1.) To make a prediction for an individual:
+
+- Find the linear predictor based on their GPA;
+- Add random logistic noise;
+- Compare this "latent" variable to the cutpoints;
+- Repeat lots of times.
+
+Because we might not be used to the logistic distribution, let's first use simulation to estimate the distribution of the latent variable for a person with a 3.5 GPA. Their linear predictor is $0.725 \times 3.5 = 2.54$. We add logistic noise and see how often they fall in each cutpoint range.
+
+```{r}
+prediction = coefficients(gpa.polr) * 3.5
+latent = prediction + rlogis(10000)
+gg = ggplot(as.data.frame(latent), aes(x = latent)) + geom_density()
+gg + geom_vline(xintercept = gpa.polr$zeta, color = "red")
+```
+
+We see that the left and middle areas are bigger than the right area. This means that "unlikely" and "somewhat likely" are more probable than "very likely." Let's find the exact probabilities. The probability of being "unlikely" is
+
+$$
+P(\beta x + \epsilon < z_{unlikely|somewhat})
+$$
+
+where $x$ is GPA, $\epsilon$ is standard logistic noise, and $z_{unlikely|somewhat}$ is the lower cutpoint. This is the same as 
+
+$$
+P(\epsilon < z_{unlikely|somewhat} - \beta x)
+$$
+
+i.e., the probabilistic a standard logistic random variable is less than $z_{unlikely|somewhat} - \beta x$. We find logistic probabilities using the `inv.logit()` function in `boot`.
+
+```{r}
+beta = coefficients(gpa.polr)
+zeta = gpa.polr$zeta
+library(boot)
+inv.logit(zeta[1] - beta * 3.5)
+```
+
+There's a 46% chance a person with a 3.5 GPA is "unlikely" to apply to grad school. Similarly, the probability they're "very likely" to apply to grad school is the probability a standard logistic random variable is *greater* than the difference between the second cutpoint and the linear predictor:
+
+```{r}
+1 - inv.logit(zeta[2] - beta * 3.5)
+```
+
+There's a 13% chance they're "very likely." That leaves a 41% chance they're "somewhat likely."
+
+Now that we know what we're doing, we can just get these probabilities using `predict()`:
+
+```{r}
+predict(gpa.polr, newdata=data.frame(gpa=3.5), type = "probs")
+```
+
+### Graphing and checking the model
+
+Let's display the fit as a function of GPA.
+
+```{r}
+gpa = seq(min(gradschool$gpa), max(gradschool$gpa), 0.01)
+grad.probs = predict(gpa.polr, newdata = data.frame(gpa), type = "prob")
+grad.probs.df = data.frame(gpa, grad.probs)
+names(grad.probs.df) = c("GPA", "Unlikely", "Somewhat Likely", "Very Likely")
+grad.probs.long = grad.probs.df %>% gather(Likelihood, Probability, 2:4)
+# Put levels in reverse order
+grad.probs.long$Likelihood = factor(grad.probs.long$Likelihood, levels = c("Very Likely", "Somewhat Likely", "Unlikely"))
+reverse.palette = c("#56B4E9", "#E69F00", "#999999", "#0072B2")
+gg = ggplot(grad.probs.long, aes(x = GPA, y = Probability, group = Likelihood, color = Likelihood)) + geom_line() + ggtitle("Likelihood of applying to grad school")
+gg + scale_color_manual(values = reverse.palette)
+```
+
+The probability of both "somewhat likely" and "very likely" increase with GPA, though "very likely" never gets very high. We can also stack the lines and use areas:
+
+```{r}
+gg = ggplot(grad.probs.long, aes(x = GPA, y = Probability, group = Likelihood, fill = Likelihood)) + geom_area() + ggtitle("Likelihood of applying to grad school")
+gg + scale_fill_manual(values = reverse.palette)
+```
+
+To check the fit, we could check every category separately. Instead we'll return to using `apply` as a quantitative variable: 0 for unlikely, 1 for somewhat likely, and 2 for very likely. That allows us to find means.
+
+```{r}
+apply.fitted = fitted.values(gpa.polr)[,2] + 2 * fitted.values(gpa.polr)[,3]
+apply.resid = gradschool$apply - apply.fitted
+gpa.polr.df = data.frame(gradschool, .fitted = apply.fitted, .resid = apply.resid)
+# Sort
+gpa.polr.df = gpa.polr.df[order(gradschool$gpa),]
+gg = ggplot(gpa.polr.df, aes(x = gpa, y = apply)) + geom_jitter(width = 0, height = 0.2, aes(color = Likelihood)) + geom_line(aes(x = gpa, y = .fitted))
+gg + ggtitle("Likelihood of applying to grad school") + scale_color_manual(values = cb_palette)
+```
+
+Now look at the residuals:
+
+```{r}
+gg = ggplot(gpa.polr.df, aes(x = gpa, y = .resid)) + geom_point()
+gg + geom_smooth(method.args = list(degree = 1))
+```
+
+This looks fine -- there's a kink for GPAs below 2.25, but that could just be because there are few people with GPAs that low.
+
+### Multiple predictors
+
+Let's now include two other variables in the model: `pared` is a binary variable indicating whether a parent has a grad degree, and `public` is a binary variable indicating whether the student goes to a public college.
+
+```{r}
+grad.polr = polr(Likelihood ~ gpa + pared + public, data = gradschool)
+display(grad.polr)
+```
+
+The deviance has gone down by about 16 and the coefficients are in the direction in you'd expect -- your parents going to grad school means it's more probable you'll go to grad school, while going to a public college means it's slightly less probable.
+
+As for numerical responses, we can study the fit by using `expand.grid()` to get a data frame of explanatories and making predictions.
+
+```{r}
+grad.grid = expand.grid(gpa = seq(min(gradschool$gpa), max(gradschool$gpa), 0.01), pared = 0:1, public = 0:1)
+grad.predict = as.data.frame(predict(grad.polr, newdata = grad.grid, type = "probs"))
+grad.polr.df = data.frame(grad.grid, grad.predict)
+names(grad.polr.df) = c("gpa", "pared", "public", "Unlikely", "Somewhat Likely", "Very Likely")
+```
+
+We'll append a new variable that gives the combination of `pared` and `public`.
+
+```{r}
+group = 2 * grad.polr.df$pared + grad.polr.df$public
+group[group == 3] = "Grad parent, public college"
+group[group == 2] = "Grad parent, private college"
+group[group == 1] = "No grad parent, public college"
+group[group == 0] = "No grad parent, private college"
+grad.polr.df$Group = factor(group)
+```
+
+There are a few ways to view this data frame, but probably the clearest is to draw a panel for each category.
+
+```{r}
+grad.polr.long = grad.polr.df %>% gather(Likelihood, Probability, 4:6)
+grad.polr.long$Likelihood = factor(grad.polr.long$Likelihood, levels = c("Unlikely", "Somewhat Likely", "Very Likely"))
+ggplot(grad.polr.long, aes(x = gpa, y = Probability, group = Group, color = Group)) + geom_line() + facet_grid(~Likelihood) + ggtitle("Likelihood of applying to grad school") + scale_color_manual(values = reverse.palette)
+```
+
+We see that private or public college makes almost no difference, so we should consider dropping that from the model.
+

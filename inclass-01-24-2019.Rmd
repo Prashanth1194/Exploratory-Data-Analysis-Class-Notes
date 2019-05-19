@@ -1,0 +1,90 @@
+---
+title: "In-class 1/24/19"
+author: "S670"
+date: "1/24/2019"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE)
+```
+
+Load packages and data:
+
+```{r}
+library(tidyverse)
+library(gapminder)
+```
+
+Subset the data to get the 2007 data:
+
+```{r}
+gapminder07 = subset(gapminder, year == 2007)
+ggplot(gapminder07, aes(x = gdpPercap, y = lifeExp)) + geom_point() + scale_x_log10()
+```
+
+Color by continent:
+
+```{r}
+cb_palette = c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+ggplot(gapminder07, aes(x = gdpPercap, y = lifeExp, color = continent)) + geom_point(alpha = 0.3) + scale_x_log10() + scale_color_manual(values = cb_palette) + geom_smooth(method = "lm", se = FALSE)
+```
+
+Fit a linear model with no interaction:
+
+```{r}
+gapminder07$logGDP = log(gapminder07$gdpPercap)
+gapminder.lm = lm(lifeExp ~ logGDP + continent, data = gapminder07)
+library(arm)
+display(gapminder.lm)
+```
+
+Plot residuals to check the model:
+
+```{r}
+library(broom)
+gapminder.lm.df = augment(gapminder.lm)
+ggplot(gapminder.lm.df, aes(x = logGDP, y = .resid)) + geom_point() + facet_wrap(~ continent) + geom_smooth()
+```
+
+If you wanted an interaction:
+
+```{r}
+lm(lifeExp ~ logGDP * continent, data = gapminder07)
+```
+
+If you wanted loesses of Africa and the Rest of the World:
+
+```{r}
+gapminder07$Africa = recode(gapminder07$continent, Africa = "Africa", .default = "Rest of the world")
+ggplot(gapminder07, aes(x = logGDP, y = lifeExp)) + facet_wrap(~ Africa) + geom_point(aes(color = continent)) + geom_smooth() + scale_color_manual(values = cb_palette)
+```
+
+```{r}
+# loess() by continent:
+africa_lo = function(data){
+  loess(lifeExp ~ logGDP, data = data)
+}
+# Nested data frame: see R for Data Science ch. 25
+# a bit gratuitous
+gap.africa = nest(group_by(gapminder07, Africa))
+# purrr::map()
+africa.models = map(gap.africa$data, africa_lo)
+gap.africa = mutate(gap.africa, model = africa.models)
+library(modelr)
+gap.africa = mutate(gap.africa, .fitted = map2(data, model, add_predictions))
+africa.fitted = unnest(gap.africa, .fitted)
+africa.fitted = mutate(africa.fitted, .resid = lifeExp - pred)
+gg = ggplot(gapminder07, aes(x = gdpPercap, y = lifeExp)) + geom_point(aes(color = continent), alpha = 0.3) + scale_x_log10() + scale_color_manual(values = cb_palette)
+gg + geom_line(data = africa.fitted, aes(x = gdpPercap, y = pred)) + facet_wrap(~ Africa, ncol = 2)
+var(africa.fitted$pred) / (var(africa.fitted$pred) + var(africa.fitted$.resid))
+```
+
+
+
+
+
+
+
+
+

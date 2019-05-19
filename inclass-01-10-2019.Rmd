@@ -1,0 +1,46 @@
+---
+title: "In-class 1/10/19"
+author: "S670"
+date: "1/10/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Read in data:
+
+```{r}
+Warriors = read.csv("gsw2017-18.csv")
+```
+
+What are the average weights by position?
+
+```{r}
+aggregate(Wt ~ Pos, mean, data = Warriors)
+```
+
+Put factor in order:
+
+```{r}
+Warriors$Pos = factor(Warriors$Pos, levels = c("PG", "SG", "SF", "PF", "C"))
+summary(Warriors$Pos)
+```
+
+Sort name as a factor by first position and then weight;
+
+```{r}
+o = order(Warriors$Pos, Warriors$Wt)
+Warriors$Player = factor(Warriors$Player, levels = Warriors$Player[o])
+summary(Warriors$Player)
+```
+
+Split player names:
+
+```{r}
+library(stringr)
+str_split(Warriors$Player, "\\\\")
+```
+
+

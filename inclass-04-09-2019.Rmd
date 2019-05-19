@@ -1,0 +1,218 @@
+---
+title: "In-class 4/9/19: Mixed models"
+author: "S670"
+date: "4/9/2019"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, tidy = TRUE, message = FALSE)
+library(tidyverse)
+cb_palette = c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+```
+
+## Radon
+
+This example comes from Gelman & Hill ch. 12. In much of North America, background levels of radon, a radioactive gas formed by decay of elements such as uranium, can be dangerously high (particularly in basements.) The file `srrs2.dat` contains data on the radioactivity measured in a sample of 12,777 U.S. households, along with a collection of covariates. The response variable is `activity`, a measurement of the concentration of radon (in picocuries per liter, I think; the EPA recommends taking action at levels above 4 pci/L.) Read in the data:
+
+```{r}
+radon.df = read.table ("srrs2.dat", header=T, sep=",")
+summary(radon.df$activity)
+ggplot(radon.df, aes(x = activity)) + geom_density() 
+```
+
+The distribution of radon is insanely skewed. We'd like to take logs, but the variable contains zeros. Well, we can just replace the zeros with the next lowest measurement (0.1) before taking logs. We'll do natural logs because that's what Gelman & Hill do.
+
+```{r}
+radon.df$log.radon = log(ifelse(radon.df$activity==0, 0.1, radon.df$activity))
+ggplot(radon.df, aes(x = log.radon)) + geom_density() 
+```
+
+The distribution is now somewhat normalized, save for the unavoidable bump at log(0.1).
+
+The variable `state2` tells us which state each observation was collected in. How much difference is there in radon levels by state?
+
+```{r, warning = FALSE}
+ggplot(radon.df, aes(x = log.radon)) + geom_density() + facet_wrap(~state2, ncol=3)
+radon.by.state = summarize(group_by(radon.df, state2), mean.log = mean(log.radon))
+ggplot(radon.by.state, aes(x = mean.log, y = state2)) + geom_point()
+```
+
+There's substantial difference by state: North Dakota has a much higher typical radon level than Michigan.
+
+We could also describe the geography by county. The data set has both a numeric (`cntyfips`) and a character version (`county`) of county. Since I don't know much county-level geography I'll use the numeric version. The numbers aren't unique across states; to get a unique version, add a two-digit prefix for the state (in `stfips`.)
+
+```{r}
+radon.df$county.no = radon.df$stfips * 1000 + radon.df$cntyfips
+```
+
+Let's pick out one state and examine it in more detail. Following Gelman & Hill, we'll do Minnesota, which might be because Minnesota works out nicely but whatever. (G&H use `state` rather than `state2` if you're trying to reporduce their work.)
+
+```{r}
+minnesota.df = subset(radon.df, state2 == "MN")
+```
+
+One potentially important explanatory variable is `floor`, which tells us on which floor on the builidng the radon measurement was taken. Here "0" means the basement, "1" means the first floor, and so on; "9" indicates a missing value.
+
+```{r}
+table(minnesota.df$floor)
+```
+
+Change "9" to missing value:
+
+```{r}
+minnesota.df$floor[minnesota.df$floor == 9] = NA
+table(minnesota.df$floor, useNA = "always")
+```
+
+Now we can look at the relationship between floor and radon:
+
+```{r, warning = FALSE}
+summarize(group_by(minnesota.df, floor), mean.log = mean(log.radon))
+ggplot(minnesota.df, aes(x = floor, y = log.radon)) + geom_jitter(width = 0.2, height = 0) + geom_smooth(method = "lm")
+minnesota.lm = lm(log.radon ~ floor, data = minnesota.df)
+library(arm)
+display(minnesota.lm)
+```
+
+The average log radon level is 1.27 in the basement and 1.26 - 0.74 = 0.52 on the first floor (that's 3.5 and 1.7 on the untransformed scale.) Since Minnesota apparently hasn't invented buildings more than one story tall yet, we don't know if the linear pattern can be extrapolated to taller buildings.
+
+Since we know there's a geographic pattern, the next variable we might try is county. For convenience, we'll create a factor version of the variable. 
+
+```{r}
+minnesota.df$county.factor = factor(minnesota.df$county.no)
+ggplot(minnesota.df, aes(x = log.radon, y = county.factor)) + geom_point() + theme(axis.text.y = element_blank())
+```
+
+Let's see how the average log radon varies by county:
+
+```{r}
+radon.by.county = summarize(group_by(minnesota.df, county.factor), mean.log = mean(log.radon))
+ggplot(radon.by.county, aes(x = mean.log)) + geom_density()
+ggplot(radon.by.county, aes(sample = mean.log)) + stat_qq()
+```
+
+There's substantial variation by county. Apart from the left tail, the variations seems approximately normal. We could simply put county into our linear model:
+
+```{r}
+county.lm = lm(log.radon ~ floor + county.factor, data = minnesota.df)
+```
+
+Is there any problem with this? One issue is that the sample sizes vary dramatically by county:
+
+```{r}
+table(minnesota.df$county.factor)
+```
+
+With 135 observations, we should be able to estimate the coefficient for county 27137 (St. Louis County) accurately. On the other hand, some counties only have one or two observations, so we wouldn't expect the coefficients for those counties to be accurately estimated.
+
+## Random effects
+
+A alternative way to model the data is by using a **multilevel model**. This basically means that the county effects are modeled as coming from a probability distribution (by default, normal.) Thus the county is consider to have a **random effect**, rather than the **fixed effect** of `county.lm`. In practice, this regresses the estimates for each county toward the mean for the whole state, with the counties with fewest observations regressed the most heavily.
+
+The `lmer()` function (in package `lme4`) is a quick and dirty way of fitting multilevel models. Firstly, fit a model with just county as a predictor:
+
+```{r}
+county.mlm = lmer(log.radon ~ 1 + (1 | county.factor), data = minnesota.df)
+display(county.mlm)
+```
+
+In this (too) simple model, we see the county effects (after accounting for the overall mean) are modeled as coming from a Normal distribution with mean 0 and standard deviation 0.38. This seems reasonable given our last plot.
+
+Now let's try a model with floor having a fixed effect and county having a random effect. This is what's called a **mixed model**.
+
+```{r}
+county.mixed = lmer(log.radon ~ floor + (1 | county.factor), data = minnesota.df)
+display(county.mixed)
+```
+
+How to read this: The predicted log radon for a particular county is 1.42, minus 0.72 if you're on the first floor, plus a county term that's drawn from a normal distribution with mean 0 and standard deviation 0.36. The residual standard error of this model is 0.75.
+
+We can think of this model as fitting a regression line for each county, where each regression line has the same slope but a different intercept. For St. Louis County (number 27137), the regression line is:
+
+```{r}
+county.lines = as.data.frame(coef(county.mixed)$county.factor)
+names(county.lines) = c("Intercept", "Slope")
+stlouis.coef = as.numeric(county.lines[row.names(county.lines) == "27137",])
+print(stlouis.coef)
+```
+
+For Lac Qui Parle County (number 27073):
+
+```{r}
+lqp.coef = as.numeric(county.lines[row.names(county.lines) == "27073",])
+print(lqp.coef)
+```
+
+The coefficient for floor is the same but the intercept is different.
+
+Let's see how the mixed model looks for these two counties.
+
+```{r, warning = FALSE}
+ggplot(subset(minnesota.df, county.factor == "27137"), aes(x = floor, y = log.radon)) + geom_point() + geom_abline(intercept = stlouis.coef[1], slope = stlouis.coef[2]) + ggtitle("Radon mixed model for St. Louis County, MN")
+ggplot(subset(minnesota.df, county.factor == "27073"), aes(x = floor, y = log.radon)) + geom_point() + geom_abline(intercept = lqp.coef[1], slope = lqp.coef[2]) + ylim(1.1, 2.8) + ggtitle("Radon mixed model for Pac Qui Parle County, MN")
+```
+
+The model is close to the data for St. Louis County but far for Pac Qui Parle. Again, the assumption here is that two data points isn't enough information to make a strong generalization about a county, so we draw a regression line that's much closer to the data set as a whole.
+
+We can look at the distribution of estimated intercepts:
+
+```{r}
+ggplot(county.lines, aes(x = Intercept)) + geom_density()
+ggplot(county.lines, aes(sample = Intercept)) + stat_qq()
+```
+
+It's not exactly normal, but that isn't a huge deal.
+
+## Uranium, too
+
+The file `cty.dat` contains data on uranium levels in parts per million in each county (variable `Uppm`), which we can use as an additional covariate.
+
+```{r}
+uranium.df = read.table("cty.dat", header=T, sep=",")
+ggplot(uranium.df, aes(x = Uppm)) + geom_density()
+```
+
+The distribution of uranium looks fine, but since we took the log of radon, it feels like we should log uranium as well. We construct a county number variable and merge the data with our Minnesota data frame:
+
+```{r}
+uranium.df$log.uranium = log(uranium.df$Uppm)
+uranium.df$county.no = uranium.df$stfips * 1000 + uranium.df$ctfips
+minnesota.merged = merge(minnesota.df, uranium.df, by = "county.no")
+ggplot(minnesota.merged, aes(x = log.uranium, y = log.radon, color = factor(floor))) + geom_point() + scale_color_manual(values = cb_palette, breaks = c(0, 1), labels = c("Basement", "First floor"), name = "Floor")
+```
+
+Now add uranium as an explanatory variable:
+
+```{r}
+uranium.mixed = lmer(log.radon ~ floor + log.uranium + (1 | county.factor), data = minnesota.merged)
+display(uranium.mixed)
+```
+
+The SD of the county effects is reduced from 0.35 to 0.16 by including uranium as a predictor, which makes sense if uranium is responsible for much but not all of the variation by county. We can also see this from the plot below, which shows that the fitted values are still somewhat scattered about a straight line.
+
+```{r, warning = FALSE}
+library(broom)
+uranium.mixed.df = augment(uranium.mixed)
+ggplot(uranium.mixed.df, aes(x = log.uranium, y = .fitted)) + geom_point() + facet_grid(~ floor)
+```
+
+Finally, let's draw maps (using the `socviz` library) to compare the two models.
+
+```{r}
+county.lines$id = row.names(county.lines)
+# devtools::install_github("kjhealy/socviz")
+library(socviz)
+county.join = left_join(county_map, county.lines, by = "id")
+ggplot(county.join, aes(x = long, y = lat, fill = Intercept, group = group)) + geom_polygon(color = "gray90", size = 0.05) + coord_fixed() + xlim(0.2e6, 0.8e6) + ylim(-0.2e6, 0.5e6) + ggtitle("County effects on radon levels") + scale_fill_continuous(name = "Intercept for county")
+```
+
+```{r}
+uranium.lines = as.data.frame(coef(uranium.mixed)$county.factor)
+names(uranium.lines) = c("Intercept", "Floor", "Log uranium")
+uranium.lines$id = row.names(uranium.lines)
+uranium.join = left_join(county_map, uranium.lines, by = "id")
+gg = ggplot(uranium.join, aes(x = long, y = lat, fill = Intercept, group = group)) + geom_polygon(color = "gray90", size = 0.05) + coord_fixed() + xlim(0.2e6, 0.8e6) + ylim(-0.2e6, 0.5e6)
+gg + ggtitle("County effects of radon levels after accounting for uranium") + scale_fill_continuous(name = "Intercept for county")
+```
+

@@ -1,0 +1,301 @@
+---
+title: "In-class 3/28/19"
+author: "S670"
+date: "3/27/2019"
+output: pdf_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## PCA
+
+**Optional reading:** Ch. 16 of Shalizi's Advanced Data Analysis (http://www.stat.cmu.edu/~cshalizi/ADAfaEPoV/) is mathy but correct and useful. I don't know of a good treatment that doesn't have a bunch of linear algebra yet isn't a horrendous over-simplification; if you've seen one, let me know.
+
+In **principal components analysis (PCA)**, we project a high-dimensional set of data on to the $k$-dimensional (hyper-) plane that retains the most of the original data's variance. This is done via a singular value decomposition. Choosing $k$ can be a hard problem, but not in EDA: we use $k = 2$ because two is the best number of dimensions for graphs. So in other words, we're displaying a data set of lots of variables on a plane.
+
+My preferred function for displaying PCA is `ggbiplot()` in the package of the same name. This isn't on CRAN, so you'll need to install it from Github:
+
+```{r, eval = FALSE}
+library(devtools)
+install_github("vqv/ggbiplot")
+```
+
+Technical note: `ggbiplot` requires `plyr`, which clashes with `dplyr`. So load `ggbiplot` before you load `dplyr` or `tidyverse`.
+
+```{r, warning = FALSE}
+library(ggbiplot)
+library(tidyverse)
+```
+
+We're going to do a lot of coloring, so let's write a convenience function that lets us quickly call our colorblind-friendly palette:
+
+```{r}
+cb_palette = c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+cbp = function(){scale_color_manual(values = cb_palette)}
+```
+
+### Wine
+
+The `ggbiplot` package contains a data set on 13 chemical measurements on the composition of a bunch of red wines from the Piedmont in Italy. (I recommend Ristorante Consorzio in Turin for both their food and their wine list.) Details are at:
+
+https://archive.ics.uci.edu/ml/datasets/Wine
+
+```{r}
+data(wine)
+nrow(wine)
+summary(wine)
+```
+
+We'd expect most of the variables to be associated with most of the other variables. 13 is a pretty large number of variable. We can still draw a pairs plot:
+
+```{r, cache = TRUE}
+library(GGally)
+ggpairs(wine)
+```
+
+but it's too crowded to see much (plus it has a non-trivial chance of crashing RStudio.) If I knew about the chemistry of wine I might try to choose variables I thought were important, but I don't, so let's do dimension reduction via PCA.
+
+The `prcomp()` function runs PCA. The main decision to make is whether to center and scale the data: the function's default is to center but not scale. However, rescaling is almost the right thing to do when the variables are not all measuring the same thing.
+
+```{r}
+wine.pca = prcomp(wine, scale. = TRUE)
+```
+
+(Note the dot after scale.) The `wine.pca` object we've created contains two main things of interest. One is a `rotation` matrix that give a new coordinate system for the data, the **principal components**, such that all the components are orthogonal.
+
+```{r}
+wine.pca$rotation[, 1:3]
+```
+
+Roughly, out of all the 13-dimensional directions through the origin you could project the scaled data on to, PC1 is the direction that results in the most variance retained, i.e. in the projected data with the highest variance. PC2 is the direction out of all those orthogonal to PC1 that results in the most variance retained, and so on. (More rigorously, the PCs are the eigenvectors of the covariance matrix of the scaled data, sorted by decreasing eigenvalue.) Thus if we want a two-dimensional representation of the data, then projecting the data on to PC1 and PC2 gives the representation that retains the most variance in this sense. Note that different implementations of PCA may flip the signs of the vectors; these are arbitrary. In many uses of PCA, we wish to reduce the dimensionality of the data, and thus "how many principal components should we keep?" becomes a question to agonize over. However, in this course we mostly want to draw graphs, so our answer will simply be "two, or very occasionally three."
+
+The coordinates of the observations in this new system are stored in the `x` matrix inside `wine.pca`:
+
+```{r}
+wine.pca$x[1:10, 1:2]
+```
+
+We now use `ggbiplot()` to visualize the data projected on the first two principal components. We first leave out the "biplot" part and just plot the points.
+
+```{r}
+library(ggbiplot)
+ggbiplot(wine.pca, obs.scale = 1, var.axes = FALSE) + xlim(-5, 5) + ylim(-5, 5)
+```
+
+`obs.scale = 1` prevent the rescaling of the principal components and `var.axes = FALSE` suppresses the biplot. We see that on this two-dimensional representation, there's a U-shape. For this to be useful, we need to relate this back to the wines. There's a data variable called `wine.class` that gives the varietal of the wines. We can group according to this variable.
+
+```{r}
+ggbiplot(wine.pca, obs.scale = 1, var.axes = FALSE) + xlim(-5, 5) + ylim(-5, 5) + cbp()
+```
+
+We can now see an ordering: Barolo, Grignolino, Barbera. Barolo is a full-bodied red wine and Barbera is medium-bodied. I don't know anything about Grignolino but it looks like it's not simply in between the other two. The separation is fairly clear, with only a small amount of overlap between Barolo and Grignolino and between Grignolino and Barbera. (Note that if our main goal was classification, *linear discriminant analysis (LDA)* or one of its many variants might be a better approach than PCA.)
+
+In addition to displaying the data, we also want to interpret how this new coordinate system relates to the original variables. This is already encoded in our `rotation` matrix. Where the columns of the rotation matrix give the meanings of each principal components, the rows tell us the *directions* associated with each of the original variables in the new system. That is, if some wines were average on all variables besides alcohol, the alcohol row (sometimes called a *loading*) would give the line along which all these wines would fall in the new system. To show these directions, we add the **biplot**:
+
+```{r}
+ggbiplot(wine.pca, obs.scale = 1, groups = wine.class) + xlim(-5, 5) + ylim(-5, 5) + cbp()
+```
+
+The direction of the arrows tells you in which direction values of that variable are generally increasing. So `AlcAsh` (the alkalinity of the ash in the wine) increases as you go right. `Flav` (flavanoids) increase as you go left, `Ash` increases as you go up, and so on.
+
+The length of the arrows gives the magnitude correlation of the variables with the two principal components. So `Flav` has a relatively strong relationship with the two principal components, compared to, say, `Ash`. (Note that the arrows are not on the same numerical scale as the observations.)
+
+You can also use `geom_point()` and so on to control the appearance of the graph:
+
+```{r}
+ggbiplot(wine.pca, obs.scale = 1) + geom_point(aes(color = wine$Alcohol)) + xlim(-5, 5) + ylim(-5, 5)
+```
+
+Finally, you could also plot principal components other than the first two:
+
+```{r}
+ggbiplot(wine.pca, obs.scale = 1, groups = wine.class, choices = c(1,3)) + cbp()
+```
+
+We see that using the third principal component doesn't give much help with separation (over and above what the first component gives.)
+
+## PCA vs. factor analysis
+
+**Factor analysis** is a technique closely related to PCA, with some subtle differences. The conceptual difference between the two can be summarized as follows:
+
+- *PCA:* Determine a sequence of orthogonal directions such that each direction explains the maximum amount of variance not yet explained by the directions you've already chosen.
+- *Factor analysis:* Assume a model such that the data consists of points on a $k$-dimensional subspace plus some probabilistic error term. Estimate that $k$-dimensional subspace. (Since we're estimating a subspace rather than directions, the subspace can be rotated arbitrarily, though there are conventions that can make the subspace line up with PCA to some extent.)
+
+Sometimes, but not always, these two methods give similar results (conditional on the number of components/factors,) but the interpretation can be quite different.
+
+The base R implementation of factor analysis is the unfortunately named `factanal()` function. Below, we fit a model with two orthogonal "factors" and specifying we want "regression" scores, which give us the locations of the individuals in the new two-dimensional coordinate system.
+
+```{r}
+wine.2factor = factanal(wine, factors = 2, scores = "regression")
+wine.2factor.df = data.frame(wine.2factor$scores, wine.class)
+ggplot(wine.2factor.df, aes(x = Factor1, y = Factor2, color = wine.class)) + geom_point() + coord_fixed() + cbp()
+```
+
+This looks kind of the same as our plot of the wines in the PCA co-ordinate system (with the first component flipped), but a closer look shows the points are not in the same relative positions. This becomes a bit clearer if we look at the variable loadings:
+
+```{r}
+wine.loadings = loadings(wine.2factor)[1:13,]
+wine.loadings.df = data.frame(variable = row.names(wine.loadings), wine.loadings)
+ggplot(wine.loadings.df, aes(x = Factor1, y = Factor2, label = variable)) + geom_vline(xintercept = 0, color = "pink") + geom_hline(yintercept = 0, color = "pink") + geom_text() + coord_fixed() + xlim(-1, 1) + ylim(-1, 1)
+```
+
+Here we see that "Ash" and "Alcohol" are pointing in the same direction, whereas in the PCA biplot they were pointing in quite different directions.
+
+In both cases, for EDA purposes all we're doing is representing a high-dimensional data set in a small number of dimensions, so it's hard to say whether PCA or factor analysis is "right" or "wrong." A big practical difference is that PCA doesn't require you to specify a number of components in advance, whereas factor analysis does make you decide on the number of factors in advance. Of course, you could just try out every possible number of factors and see which number gives you the best results, but this feels like cheating in a way that it doesn't in PCA. Remember, the assumption behind factor analysis is that the true pattern really does lie on a low-dimensional subspace, and it seems heroic to make this assumption if you don't even know how many dimensions this subspace has.
+
+Interpretations of factor analysis and, to some extent, PCA too) also seem to run into the issue of -- here's a word I learned from the Department of History and Philosophy of Science across the hall in Ballantine -- *reification*, where the factors are taken to be actually existing things. In personality studies, for example, factor analysis led to the Big Five model, which is an efficient 5-dimensional summary of personality. The temptation, however, is to then immediately conclude "personality really is five dimensional, and these are the five dimensions." However, this isn't good reasoning unless you've done a confirmatory analysis to back it up. (From my not-thorough-at-all understanding of the psychometric literature, the Big Five model failed confirmatory analyses, which the researchers took to indicate that you shouldn't do confirmatory analysis.)
+
+## Chernoff faces
+
+These aren't actually useful but are amusing.
+
+```{r, height = 8}
+library(TeachingDemos)
+faces(state.x77)
+```
+
+## Example: The 88th Congress
+
+The 88th Congress, which met in 1963--1964, passed many important pieces of legislation, including the Civil Rights Act, the Economic Opportunity Act, the Food Stamp Act, the Clean Air Act, and the Tonkin Gulf Resolution. It's especially interesting because many of these key votes were not along party lines. Data on all of the roll call votes held is on the site
+
+http://www.voteview.com/house88.htm
+
+We can download the Stata file, import it, and reformat it as a data frame (or a tibble if you prefer):
+
+```{r}
+library(rio)
+house88 = import("hou88kh.dta")
+```
+
+There were 232 roll call votes, coded 0 to 9 (see the webpage for details.) We can recode as follows:
+
+- Let 1 mean some kind of Yes;
+- Let $-1$ mean some kind of No;
+- Everything else is a 0.
+
+(This could be a bit misleading, as the zeroes don't distinguish between people who abstained from a vote and people who couldn't vote because they weren't in Congress or were dead, but we'll keep it simple.) Let's create a new matrix called `votes6364` to contain this new encoding.
+
+```{r}
+votes6364 = matrix(0, nrow = 445, ncol = 232)
+votes6364[house88[,10:232] == 1] = 1
+votes6364[house88[,10:232] == 2] = 1
+votes6364[house88[,10:232] == 3] = 1
+votes6364[house88[,10:232] == 4] = -1
+votes6364[house88[,10:232] == 5] = -1
+votes6364[house88[,10:232] == 6] = -1
+```
+
+Everything's now on the same scale, so rescaling isn't necessary. Run PCA:
+
+```{r}
+votes.pca = prcomp(votes6364)
+```
+
+Now display the results, suppressing the biplot since we don't want 232 arrows cluttering our graph.
+
+```{r}
+ggbiplot(votes.pca, obs.scale = 1, var.axes = FALSE)
+```
+
+Recode the `party` variable to use as group labels:
+
+```{r}
+party = house88$party
+party[party == 100] = "Democrat"
+party[party == 200] = "Republican"
+party = factor(party, levels = c("Republican", "Democrat"))
+ggbiplot(votes.pca, obs.scale = 1, var.axes = FALSE, group = party) + cbp()
+```
+
+We see pretty clear separation between Republicans and Democrats. Eyeball a line:
+
+```{r}
+ggbiplot(votes.pca, obs.scale = 1, var.axes = FALSE, group = party) + geom_abline(intercept = -1, slope = -2/3) + cbp()
+```
+
+We can add names:
+
+```{r}
+ggbiplot(votes.pca, obs.scale = 1, var.axes = FALSE, group = party, labels = house88$name, labels.size = 2) + geom_abline(intercept = -1, slope = -2/3) + cbp()
+```
+
+but these don't mean much unless you're really up to speed with your historical members of Congress. Instead, we find the state codes and use those as labels:
+
+```{r}
+statecodes = read.table("statecodes.txt")
+state = rep(NA, length(house88$state))
+# Too lazy to work out how to do this efficiently
+# so use a for loop
+for(J in statecodes$V1){
+  code = statecodes$V2[statecodes$V1 == J]
+  state[house88$state == J] = as.character(code)
+}
+ggbiplot(votes.pca, obs.scale = 1, var.axes = FALSE, group = party, labels = state, labels.size = 3) + geom_abline(intercept = -1, slope = -2/3) + cbp()
+```
+
+In general, northeastern states are toward the bottom-right, while southern and Midwestern states tend to be toward the top left.
+
+We can now look at the results of the key votes we noted at the beginning of the section. Start with the Civil Rights Act. According to ftp://k7moa.com/dtl/88.dtl, this was vote number 128, so we make our group label column 128 of `votes6364`.
+
+```{r}
+ggbiplot(votes.pca, obs.scale = 1, var.axes = FALSE, group = factor(votes6364[,128]), labels = state, labels.size = 3) + geom_abline(intercept = -1, slope = -2/3) + scale_color_manual(values = cb_palette, name = "Vote", labels = c("No", "Other", "Yes")) + ggtitle("House vote, Civil Rights Act of 1964")
+```
+
+The vote here is almost entirely explained by the second component. The direct of the biplot arrow for this vote is given by the first two numbers of row 128 of the `rotation` matrix produced by the PCA:
+
+```{r}
+votes.pca$rotation[128,1:2]
+```
+
+But it might be helpful to add a line *perpendicular* to this to separate ayes from nays. We draw such a line through the origin (though this won't always be the best choice):
+
+```{r}
+ggbiplot(votes.pca, obs.scale = 1, var.axes = FALSE, group = factor(votes6364[,128]), labels = state, labels.size = 3) + geom_abline(slope = - votes.pca$rotation[1,128] / votes.pca$rotation[2,128]) + scale_color_manual(values = cb_palette, name = "Vote", labels = c("No", "Other", "Yes")) + ggtitle("House vote, Civil Rights Act of 1964")
+```
+
+The Economic Opportunity Act (vote 201):
+
+```{r}
+gg = ggbiplot(votes.pca, obs.scale = 1, var.axes = FALSE, group = factor(votes6364[,201]), labels = state, labels.size = 3) + geom_abline(slope = - votes.pca$rotation[1,201] / votes.pca$rotation[2,201]) + scale_color_manual(values = cb_palette, name = "Vote", labels = c("No", "Other", "Yes"))
+gg + ggtitle("House vote, Economic Opportunity Act 1964")
+```
+
+This vote is better explained by the first component.
+
+The Food Stamp Act (vote 149):
+
+```{r}
+ggbiplot(votes.pca, obs.scale = 1, var.axes = FALSE, group = factor(votes6364[,149]), labels = state, labels.size = 3) + geom_abline(slope = - votes.pca$rotation[1,149] / votes.pca$rotation[2,149]) + scale_color_manual(values = cb_palette, name = "Vote", labels = c("No", "Other", "Yes")) + ggtitle("House vote, Food Stamp Act 1964")
+```
+
+This is a bit closer to being along party lines.
+
+The Clean Air Act (vote 47):
+
+```{r}
+ggbiplot(votes.pca, obs.scale = 1, var.axes = FALSE, group = factor(votes6364[,47]), labels = state, labels.size = 3) + geom_abline(slope = - votes.pca$rotation[1,47] / votes.pca$rotation[2,47]) + scale_color_manual(values = cb_palette, name = "Vote", labels = c("No", "Other", "Yes")) + ggtitle("House vote, Clean Air Act 1964")
+```
+
+The line is not doing a good job here. Most Democrats voted yes, but the behavior of Republicans is more complicated, though No votes seem to become more common as we go left. We can try going to the third component:
+
+```{r}
+ggbiplot(votes.pca, obs.scale = 1, var.axes = FALSE, choice = c(1,3), group = factor(votes6364[,47]), labels = state, labels.size = 3) + scale_color_manual(values = cb_palette, name = "Vote", labels = c("No", "Other", "Yes")) + ggtitle("House vote, Clean Air Act 1964")
+```
+
+but this doesn't necessarily make things much clearer. (At this point you just phone a political historian.)
+
+The Tonkin Gulf Resolution (vote 197):
+
+```{r}
+ggbiplot(votes.pca, obs.scale = 1, var.axes = FALSE, group = factor(votes6364[,197]), labels = state, labels.size = 3) + scale_color_manual(values = cb_palette, name = "Vote", labels = c("No", "Other", "Yes")) + ggtitle("House vote, Tonkin Gulf Resolution")
+```
+
+Just about everyone voted yes except Eugene Siler (who didn't show up for the vote but was a "paired no.")
+
+It seems that the first component represents something like economic ideology and the second component represents something like social ideology. If you think there really are latent random variables called "economic ideology" and "social ideology", then factor analysis might be a good alternative (but, as usual, you should check your model and be extremely hesitant to make causal claims.)
+
+
+
+

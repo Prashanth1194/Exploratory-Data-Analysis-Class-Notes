@@ -1,0 +1,63 @@
+---
+title: "In-class 1/8/2019"
+author: "S681"
+date: "1/8/2019"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, tidy = TRUE)
+```
+
+Read the file warriors.txt into R:
+
+```{r warriors}
+Warriors = read.table("warriors.txt", header = TRUE)
+Warriors
+```
+
+Find the numerical summary of heights:
+
+```{r}
+summary(Warriors$Height)
+```
+
+Load the ggplot2 package:
+
+```{r}
+library(ggplot2)
+```
+
+Plot data:
+
+```{r}
+ggplot(Warriors, aes(x = Height, y = Name))
+```
+
+```{r}
+ggplot(Warriors, aes(x = Height, y = Name)) + geom_point()
+```
+
+Bar graph:
+
+```{r}
+ggplot(Warriors, aes(x = Name, y = Height)) + geom_bar(stat = 'identity') + coord_flip()
+```
+
+Sort in height order:
+
+```{r}
+o = order(Warriors$Height)
+Warriors$Name = factor(Warriors$Name, levels = Warriors$Name[o])
+gg = ggplot(Warriors, aes(x = Height, y = Name, color = Pos)) + geom_point()
+gg + xlab("Height (inches)") + ggtitle("Heights of the 2017-18 Warriors")
+```
+
+
+
+
+
+
+

@@ -1,0 +1,226 @@
+---
+title: "In-class 4/4/19"
+author: "S670"
+date: "4/4/2019"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, tidy = TRUE, message = FALSE)
+library(tidyverse)
+cb_palette = c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+```
+
+## Unordered categorial responses
+
+**Optional reading: Agresti, Categorical Data Analysis, section 8.1 (3rd edition pp. 294--297.)**
+
+With categorical regression, the main distinction is between models with **ordered** categories and models with **unordered** categories. Let's start with the ordered case.
+
+### Alligator food
+
+What do alligators like to eat? Researcher captured 219 alligators in four Florida lakes, and categorized them by the primary contents of their stomach.
+
+```{r}
+alligator = read.table("alligator.txt", header = TRUE)
+head(alligator)
+```
+
+- `lake` gives the lake where the alligator was captured;
+- `sex` is male or female;
+- `size` is small or large;
+- `food` is fish, invertebrate, reptile, bird, or other;
+- `count` is how many of the 219 alligators had that combination of lake, sex, size, and food.
+
+Check that there are $4 \times 2 \times 2 \times 5 = 80$ rows:
+
+```{r}
+nrow(alligator)
+```
+
+Check that there are 219 alligators:
+
+```{r}
+sum(alligator$count)
+```
+
+One annoying thing about categorical data is that different R function often require the data to be in different formats. To get it over with, let's put the data in wide form. This will also let us print out a table with fewer rows that gives all the data.
+
+```{r}
+alligator.wide = alligator %>% spread(food, count)
+alligator.wide
+```
+
+Just by looking at the numbers we see that fish are relatively popular, while birds and reptiles are unpopular. Our eventual goal will be to build a model that gives the probability an alligator prefers each type of food, based on the predictors we have.
+
+### Stacking vs. faceting
+
+We can display the data using dots or bars. (I prefer the solidity of bars to points for graphs of raw count data, but this is idiosyncratic.)
+
+```{r}
+ggplot(alligator, aes(x = food, y = count)) + geom_bar(stat = "identity")
+```
+
+One way of including an additional categorical predictor is by stacking. This is easily achieved using `fill`:
+
+```{r}
+ggplot(alligator, aes(x = food, y = count, fill = lake)) + geom_bar(stat = "identity") + scale_fill_manual(values = cb_palette)
+```
+
+However, it's hard to clearly compare the distributions for the four lakes in the above graph. Faceting is usually better:
+
+```{r}
+ggplot(alligator, aes(x = food, y = count, fill = lake)) + geom_bar(stat = "identity") + facet_wrap(~lake) + scale_fill_manual(values = cb_palette)
+```
+
+As in the continuous case, it's easy to facet two-ways, though you need to fiddle with the labeling to make it clear.
+
+```{r}
+gg = ggplot(alligator, aes(x = food, y = count)) + geom_bar(stat = "identity") + facet_wrap(~size + lake, ncol = 4, labeller = label_context)
+gg + theme(axis.text=element_text(size=8))
+```
+
+If you really want to get another variable in, you can use switch back to dots and use color:
+
+```{r}
+ggplot(alligator, aes(x = food, y = count, color = sex)) + geom_point() + facet_wrap(~size + lake, ncol = 4, labeller = label_context) + theme(axis.text=element_text(size=7)) + scale_color_manual(values = cb_palette)
+```
+
+### Mosaic plots
+
+A (slightly controversial) alternative to the aobve is **mosaic plots**. Alternatives are the `mosaic()` function in package `vcd` and `geom_mosaic()` in the `ggmosiac` package; we'll use the latter because it allows us to combine mosaic plots with faceting.
+
+`ggmosaic` requires the data in "product" format (easily achieved with the `product()` function) and a `weight` variable. Here our weights are the counts of alligators in each combination of categories. Let's first draw a mosaic plot breaking up the total sample of alligators by lake.
+
+```{r}
+# install.packages('ggmosaic')
+library(ggmosaic)
+ggplot(alligator) + geom_mosaic(aes(product(lake), weight = count)) + xlab("Lake") + ggtitle("Boring mosaic plot of alligator counts")
+```
+
+Here, the width of each block indicates the relative frequency of the variable. This isn't very interesting, but we can also divide up the area two ways:
+
+```{r}
+ggplot(alligator) + geom_mosaic(aes(product(food, lake), weight = count, fill = food)) + xlab("Lake") + ylab("Proportion of gators at that lake") + scale_fill_manual(values = cb_palette)
+```
+
+The above plot shows us the *conditional* distribution of each type of food, given the lake, as well as the joint relative frequency of each lake/food combination. The preferred types of food do seem to differ a lot by lake.
+
+```{r}
+ggplot(alligator) + geom_mosaic(aes(product(food, size), weight = count, fill = food)) + xlab("Alligator size") + scale_fill_manual(values = cb_palette)
+ggplot(alligator) + geom_mosaic(aes(product(food, sex), weight = count, fill = food)) + xlab("Sex") + scale_fill_manual(values = cb_palette)
+```
+
+We see that in the sample, there are more small gators than large ones, and more males than females. More importantly, the conditional distribution of food looks quite different between big and small gators, but quite similar comparing males and females.
+
+We could keep on subdividing the bars in an attempt to look for interactions, but this is messy. Combining mosaics with faceting is preferable. In this case, because the data consists of a sample from each lake, it makes sense to facet by lake.
+
+```{r}
+ggplot(alligator) + geom_mosaic(aes(product(food, size), weight = count, fill = food)) + facet_wrap(~lake, ncol=2, labeller = label_context) + xlab("Alligator size") + scale_fill_manual(values = cb_palette)
+```
+
+### Multinomial regression
+
+Let's fit a model using `lake` and `size` as predictors. For categorical responses, we want the conditional distribution given the predictors to be `multinomial`. I use the `vglm()` function (vector GLM) in package `VGAM` to fit multinomial regressions. The syntax is similar to that of `glm()` with family `multinomial`, except you need to specify a matrix of responses (one column for each category.) This can be done using `cbind()` with the data in wide format.
+
+```{r, warning = FALSE}
+# install.packages('VGAM')
+library(VGAM)
+alligator.mlogit = vglm(cbind(bird, fish, invert, other, reptile) ~ lake + size, 
+    family = multinomial, data = alligator.wide)
+alligator.mlogit
+```
+
+
+There are lots of coefficients here! These can be interpreted in terms of log odds, but instead we'll examine the model fit graphically.
+
+```{r}
+alligator.mlogit.df = data.frame(model.frame(alligator.mlogit), fitted.values(alligator.mlogit))
+alligator.mlogit.long = alligator.mlogit.df %>% gather(food, probability, bird:reptile)
+ggplot(alligator.mlogit.long, aes(x = food, y = probability)) + geom_point() + 
+    facet_wrap(~lake + size, ncol = 4)
+```
+
+This is basically a standardized and smoothed version of our faceted bar graphs above. The smoothing might have some advantages over just taking raw data, e.g. there are no zero probabilities.
+
+We could also collapse the large and small rows and color-code:
+
+```{r}
+ggplot(alligator.mlogit.long, aes(x = food, y = probability, col = size)) + 
+    geom_point() + facet_wrap(~ lake) + scale_color_manual(values = cb_palette)
+```
+
+Let's check the deviance of a couple of alternatives:
+
+```{r}
+deviance(vglm(cbind(bird, fish, invert, other, reptile) ~ lake + size + sex, family = multinomial, data = alligator.wide))
+deviance(vglm(cbind(bird, fish, invert, other, reptile) ~ lake * size, family = multinomial, data = alligator.wide))
+```
+
+Adding sex only reduces deviance by a trivial amount (less than the 4 extra degrees of freedom), and so is unlikely to be worth it. Adding an interaction between lake and size reduces deviance by a lot, but also makes the model much more complicated, so that's a judgment call. It's probably worth it if you want to do prediction.
+
+```{r}
+alligator.int = vglm(cbind(bird, fish, invert, other, reptile) ~ lake * size, family = multinomial, data = alligator.wide)
+alligator.int.df = data.frame(model.frame(alligator.int), fitted.values(alligator.int))
+alligator.int.long = alligator.int.df %>% gather(food, probability, bird:reptile)
+ggplot(alligator.int.long, aes(x = food, y = probability, col = size)) + 
+    geom_point() + facet_wrap(~ lake) + scale_color_manual(values = cb_palette)
+```
+
+But when we add an interaction between categorical predictors, this is just equivalent to taking the raw proportions for each two-way combination of predictors. So we're back to the two-way faceted bar graph, only standardized so that each panel adds up to probability 1.
+
+### Quantitative predictors
+
+We can also fit multinomial models with quantitative predictors. In the file `gator2.txt`, the numerical predictor is the length of the alligator in meters.
+
+```{r}
+gator2 = read.table("gator2.txt", header = TRUE)
+summary(gator2)
+gator2.mlogit = vglm(food ~ length, family = multinomial, data = gator2)
+gator2.mlogit
+```
+
+As we did in the ordered categories case, let's start making predictions to understand the fit. First, on the linear predictor (i.e. transformed) scale:
+
+```{r}
+log.ratios = predict(gator2.mlogit, newdata = data.frame(length = 2))
+log.ratios
+```
+
+This gives us the log probability ratios for one type of food to another. The log of the probability ratio for fish to other is $1.62 - 0.11 \times 2 \approx 1.4$ and for invertebrates to other is $5.7 - 2.47 \times 2 \approx 0.77$. (Note that `vglm()` take the *last* level of the factor as the baseline, which is weird but is what it is.)
+
+Now, on the probability scale:
+
+```{r}
+twometerprobs = predict(gator2.mlogit, newdata = data.frame(length = 2), type = "response")
+twometerprobs
+```
+
+To go from the probability scale to the linear predictor scale:
+
+```{r}
+log(twometerprobs[1:2] / twometerprobs[3])
+```
+
+To go from the linear predictor scale to the probability scale:
+
+```{r}
+exp(c(log.ratios, 0)) / sum(exp(c(log.ratios, 0)))
+```
+
+Now let's look at how these probabilities vary with length:
+
+```{r}
+length = data.frame(length = seq(1.24, 3.89, 0.01))
+gator2.pred = predict(gator2.mlogit, newdata = length, type = "response")
+gator2.pred.df = data.frame(length, gator2.pred)
+gator2.pred.long = gator2.pred.df %>% gather(food, probability, Fish:Other)
+ggplot(gator2.pred.long, aes(x = length, y = probability, group = food, color = food)) + 
+    geom_line() + ggtitle("What do alligators eat?") + scale_color_manual(values = cb_palette)
+```
+
+Bigger alligators prefer fish and, to a lesser extend, "other." Smaller alligators prefer invertebrates.
+
+We finally note that just as with the Poisson, multinomial data is often overdispersed, so be careful of taking standard errors literally.

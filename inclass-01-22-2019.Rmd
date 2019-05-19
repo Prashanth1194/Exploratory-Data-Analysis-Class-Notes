@@ -1,0 +1,63 @@
+---
+title: "In-class 1/22/19"
+author: "S670"
+date: "1/22/2019"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, tidy = TRUE)
+```
+
+Load the data and packages:
+
+```{r}
+load("lattice.RData")
+library(tidyverse)
+```
+
+Look at the fly eye data:
+
+```{r}
+gg = ggplot(fly, aes(x = temperature, y = facet)) + geom_jitter(height = 0.25, width = 0.5, size = 0.7)
+```
+
+Find the mean of facet for each temperature:
+
+```{r}
+facet.means = aggregate(facet ~ temperature, mean, data = fly)
+gg + geom_point(data = facet.means, aes(color = "pink", size = 1.5)) + theme(legend.position = "none") +
+  geom_smooth(method = "lm")
+```
+
+Ganglion data:
+
+```{r}
+ggplot(ganglion, aes(x = area, y = cp.ratio)) + geom_point() + scale_y_log10() + geom_smooth(method = "lm")
+```
+
+Fit the linear model:
+
+```{r}
+ganglion$log.cp = log(ganglion$cp.ratio)
+ganglion.lm = lm(log.cp ~ area, data = ganglion)
+ganglion.lm
+```
+
+Look at the residuals:
+
+```{r}
+library(broom)
+ganglion.lm.df = augment(ganglion.lm)
+ggplot(ganglion.lm.df, aes(x = area, y = .resid)) + geom_point() + geom_smooth(method = "loess", method.args = list(degree = 1), se = FALSE)
+```
+
+
+
+
+
+
+
+
+
+
